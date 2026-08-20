@@ -1,0 +1,48 @@
+# Push workflow: builds a dev artifact (vX.Y.Z-dev.<build>) on push to main.
+# Tags (v*) are handled by release.yml; this ignores them.
+name: push
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: false
+
+  dev-artifact:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build dev binary (linux/amd64)
+        env:
+          VERSION:      ${{ needs.ci.outputs.version }}
+          BUILD_NUMBER: ${{ needs.ci.outputs.build_number }}
+          COMMIT:       ${{ needs.ci.outputs.commit }}
+          BUILD_TIME:   ${{ needs.ci.outputs.build_time }}
+        run: |
+          go build -trimpath -ldflags "\
+            -X 'proxydge/internal/version.Version=${VERSION}' \
+            -X 'proxydge/internal/version.BuildNumber=${BUILD_NUMBER}' \
+            -X 'proxydge/internal/version.Commit=${COMMIT}' \
+            -X 'proxydge/internal/version.BuildTime=${BUILD_TIME}'" \
+            -o proxydge-linux-amd64 .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proxydge-${{ needs.ci.outputs.version }}-linux-amd64
+          path: proxydge-linux-amd64
+          if-no-files-found: error

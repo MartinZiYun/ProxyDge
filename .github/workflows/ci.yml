@@ -1,0 +1,54 @@
+# CI reusable workflow: runs tests/vet, allocates the global build number,
+# computes version+metadata, and exposes them as outputs. Push and release
+# workflows call this so version/build-number logic lives in exactly one place.
+name: CI
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        description: "true for tagged releases, false for dev push builds"
+        type: boolean
+        required: true
+    outputs:
+      version:      { value: ${{ jobs.meta.outputs.version }} }
+      build_number: { value: ${{ jobs.meta.outputs.build_number }} }
+      commit:       { value: ${{ jobs.meta.outputs.commit }} }
+      build_time:   { value: ${{ jobs.meta.outputs.build_time }} }
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to push the build-counter branch
+    outputs:
+      version:      ${{ steps.meta.outputs.version }}
+      build_number: ${{ steps.meta.outputs.build_number }}
+      commit:       ${{ steps.meta.outputs.commit }}
+      build_time:   ${{ steps.meta.outputs.build_time }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for git describe
+      - name: Allocate global build number
+        id: bn
+        run: bash .github/scripts/alloc-build-number.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute version
+        id: meta
+        run: bash .github/scripts/compute-version.sh
+        env:
+          RELEASE: ${{ inputs.release }}
+          BUILD_NUMBER: ${{ steps.bn.outputs.build_number }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...

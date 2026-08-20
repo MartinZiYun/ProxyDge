@@ -20,13 +20,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"runtime/debug"
 	"syscall"
 
 	"proxydge/internal/config"
 	"proxydge/internal/gateway"
 	"proxydge/internal/proxyproto/goproxyproto"
 	"proxydge/internal/transport"
+	"proxydge/internal/version"
 )
 
 // out is where help/version output goes. It is a package var so tests can
@@ -73,10 +73,10 @@ func cmdStart(args []string) int {
 		return 2
 	}
 
-	// Startup banner: version + loaded config file + per-field source. Printed
-	// to stderr (unconditional, for troubleshooting) before binding so it shows
-	// even if listen/serve later fails. Captured by journalctl.
-	fmt.Fprintf(os.Stderr, "proxydge %s\n", versionInfo())
+	// Startup banner: version block + loaded config file + per-field source.
+	// Printed to stderr (unconditional, for troubleshooting) before binding so
+	// it shows even if listen/serve later fails. Captured by journalctl.
+	fmt.Fprintln(os.Stderr, version.String())
 	fmt.Fprint(os.Stderr, cfg.Describe())
 
 	ln, err := transport.Listen("tcp", cfg.Listen)
@@ -144,45 +144,26 @@ func cmdInit(args []string) int {
 	return 0
 }
 
-// cmdVersion prints build info. Uses runtime/debug.BuildInfo so the git revision
-// (when built from a VCS checkout) is embedded automatically — no ldflags.
+// cmdVersion prints build info. The metadata comes from the version package
+// (ldflags-injected in CI, falling back to debug.BuildInfo for local builds).
+//   proxydge version           -> detailed multi-line banner
+//   proxydge version --short   -> just the SemVer core, e.g. v0.1.0
 func cmdVersion(args []string) int {
-	fmt.Fprintf(out, "proxydge %s\n", versionInfo())
-	return 0
-}
-
-// versionInfo returns the version detail string (without the "proxydge " prefix):
-// "<version> (rev <sha>, modified=<bool>)" or "<version>" when no VCS info.
-func versionInfo() string {
-	bi, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "(unknown)"
-	}
-	ver := bi.Main.Version
-	if ver == "" {
-		ver = "(devel)"
-	}
-	rev, modified := vcsInfo(bi)
-	if rev != "" {
-		return fmt.Sprintf("%s (rev %s, modified=%v)", ver, rev, modified)
-	}
-	return ver
-}
-
-// vcsInfo extracts the VCS revision (short) and dirty flag from build settings.
-func vcsInfo(bi *debug.BuildInfo) (rev string, modified bool) {
-	for _, s := range bi.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			rev = s.Value
-		case "vcs.modified":
-			modified = s.Value == "true"
+	fs := flag.NewFlagSet("proxydge version", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	short := fs.Bool("short", false, "print only the version (e.g. v0.1.0)")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
 		}
+		return 2
 	}
-	if len(rev) > 7 {
-		rev = rev[:7]
+	if *short {
+		fmt.Fprintln(out, version.Short())
+	} else {
+		fmt.Fprintln(out, version.String())
 	}
-	return rev, modified
+	return 0
 }
 
 // buildLogger constructs the unified *slog.Logger from the two independent

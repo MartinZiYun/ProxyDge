@@ -71,8 +71,20 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version: want exit 0, got %d", code)
 	}
-	if !strings.HasPrefix(got, "proxydge ") {
+	if !strings.HasPrefix(got, "ProxyDge ") {
 		t.Fatalf("version output: %q", got)
+	}
+}
+
+func TestVersionShort(t *testing.T) {
+	var code int
+	got := captureOut(t, func() { code = run([]string{"version", "--short"}) })
+	if code != 0 {
+		t.Fatalf("version --short: want exit 0, got %d", code)
+	}
+	// Local build fallback Version="dev" -> Short()="dev".
+	if got = strings.TrimSpace(got); got != "dev" {
+		t.Fatalf("version --short: want %q (fallback), got %q", "dev", got)
 	}
 }
 

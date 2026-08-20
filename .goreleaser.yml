@@ -1,0 +1,46 @@
+# GoReleaser config for tagged releases. ldflags inject the version metadata
+# computed by the CI workflow (VERSION/BUILD_NUMBER/COMMIT/BUILD_TIME env vars).
+# Targets: linux + windows, amd64 + arm64.
+version: 2
+
+project_name: proxydge
+
+builds:
+  - id: proxydge
+    main: .
+    binary: proxydge
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -trimpath
+      - -X 'proxydge/internal/version.Version={{.Env.VERSION}}'
+      - -X 'proxydge/internal/version.BuildNumber={{.Env.BUILD_NUMBER}}'
+      - -X 'proxydge/internal/version.Commit={{.Env.COMMIT}}'
+      - -X 'proxydge/internal/version.BuildTime={{.Env.BUILD_TIME}}'
+
+archives:
+  - id: default
+    builds: [proxydge]
+    # name_template uses GoReleaser's .Version (tag without leading v).
+    name_template: >-
+      proxydge-{{ .Version }}-{{ .Os }}-{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: git
+  sort: desc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^chore:'
+      - '^refactor:'
+
+release:
+  name_template: 'ProxyDge {{ .Version }}'

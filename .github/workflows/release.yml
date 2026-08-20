@@ -1,0 +1,42 @@
+# Release workflow: triggered by a v* tag. Calls CI (release=true) so the tag
+# is the SemVer source, then GoReleaser does cross-platform builds, checksums,
+# and the GitHub Release. Version/BuildNumber/Commit/BuildTime come from CI.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: true
+
+  goreleaser:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          VERSION:       ${{ needs.ci.outputs.version }}
+          BUILD_NUMBER:  ${{ needs.ci.outputs.build_number }}
+          COMMIT:        ${{ needs.ci.outputs.commit }}
+          BUILD_TIME:    ${{ needs.ci.outputs.build_time }}

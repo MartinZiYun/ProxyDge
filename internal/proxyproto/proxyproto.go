@@ -1,4 +1,5 @@
 // Package proxyproto defines the gateway's own PROXY Protocol abstraction.
+//
 // Business code depends only on these types and interfaces; concrete
 // wire-format parsing/serialization lives behind an adapter (e.g.
 // internal/proxyproto/goproxyproto) and may be swapped without touching
@@ -31,7 +32,7 @@ type TLV struct {
 // Header carries the source/destination addresses that a PROXY header
 // (or a direct connection's socket addresses) describe.
 type Header struct {
-	SrcIP, DstIP     net.IP
+	SrcIP, DstIP net.IP
 	SrcPort, DstPort uint16
 	Family           Family
 	TLVs             []TLV
@@ -46,14 +47,30 @@ const (
 	SourceV2                   // PROXY Protocol v2 binary header
 )
 
-// AddrConn is the minimal address surface HeaderFromConn needs. transport.Conn
-// satisfies it, so proxyproto does not depend on transport (no import cycle).
+// String renders Source for logging. slog formats values via fmt, which calls
+// this method on the Stringer, so log lines read "direct"/"v1"/"v2".
+func (s Source) String() string {
+	switch s {
+	case SourceDirect:
+		return "direct"
+	case SourceV1:
+		return "v1"
+	case SourceV2:
+		return "v2"
+	}
+	return "unknown"
+}
+
+// AddrConn is the minimal address surface HeaderFromConn needs.
+// transport.Conn satisfies it, so proxyproto does not depend on transport
+// (no import cycle).
 type AddrConn interface {
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
 }
 
 // Reader detects and parses a (possibly absent) PROXY Protocol header from br.
+//
 //   - err == nil, src == SourceDirect: no header present (direct connection);
 //     hdr is the zero value and no bytes were consumed by detection.
 //   - err == nil, src == SourceV1 or SourceV2: a valid header was parsed; the
@@ -72,8 +89,8 @@ type Writer interface {
 // HeaderFromConn builds a Header from a direct connection's real socket
 // addresses: Src is the peer (RemoteAddr), Dst is the listener (LocalAddr).
 // Direct connections never emit UNSPEC — the socket addresses are the real
-// client information the gateway exists to preserve. Non-TCP addresses (which
-// cannot yield IP/port) fall back to FamilyUnspec.
+// client information the gateway exists to preserve. Non-TCP addresses
+// (which cannot yield IP/port) fall back to FamilyUnspec.
 func HeaderFromConn(c AddrConn) Header {
 	lt, ok1 := c.LocalAddr().(*net.TCPAddr)
 	rt, ok2 := c.RemoteAddr().(*net.TCPAddr)

@@ -3,14 +3,15 @@
 // PROXY v2 header, dials a single downstream, writes the header, and pipes
 // bytes both ways with TCP half-close. The gateway depends only on the
 // proxyproto and transport abstractions — never on the go-proxyproto library
-// directly.
+// or the config/slog-sink wiring directly. It receives a single unified
+// *slog.Logger and is unaware of how many sinks exist.
 package gateway
 
 import (
 	"bufio"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -53,18 +54,19 @@ type Gateway struct {
 	policy        Policy
 	upstream      string
 	detectTimeout time.Duration
-	log           *log.Logger
+	log           *slog.Logger
 }
 
-// New constructs a Gateway. The listener, dialer, reader, and writer are
-// injected so the gateway stays free of concrete adapter types. detectTimeout
-// bounds PROXY-header detection: if a candidate prefix (first byte 'P' or
-// '\r') arrives but no complete signature follows within this duration, the
-// connection is treated as direct. Pass 0 to block indefinitely (only safe
-// when all upstreams are guaranteed to send a complete header or close).
-func New(ln transport.Listener, dialer transport.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout time.Duration, logger *log.Logger) *Gateway {
+// New constructs a Gateway. The listener, dialer, reader, writer, and logger
+// are injected so the gateway stays free of concrete adapter and sink types.
+// detectTimeout bounds PROXY-header detection: if a candidate prefix (first
+// byte 'P' or '\r') arrives but no complete signature follows within this
+// duration, the connection is treated as direct. Pass 0 to block indefinitely
+// (only safe when all upstreams are guaranteed to send a complete header or
+// close). logger may be nil (a discarding logger is used).
+func New(ln transport.Listener, dialer transport.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout time.Duration, logger *slog.Logger) *Gateway {
 	if logger == nil {
-		logger = log.New(io.Discard, "", 0)
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Gateway{
 		ln:            ln,
@@ -107,29 +109,31 @@ func (g *Gateway) handle(c transport.Conn) {
 		_ = c.SetReadDeadline(time.Time{}) // clear: the pipe blocks normally
 	}
 	if err != nil {
-		g.log.Printf("gateway: malformed upstream header from %s: %v", c.RemoteAddr(), err)
+		g.log.Error("malformed upstream header", "remote", c.RemoteAddr(), "err", err)
 		return
 	}
 	switch {
 	case g.policy == PolicyReject && src != proxyproto.SourceDirect:
-		g.log.Printf("gateway: rejecting PROXY header (policy=reject) from %s", c.RemoteAddr())
+		g.log.Info("rejected: policy forbids PROXY header", "remote", c.RemoteAddr(), "policy", g.policy.String())
 		return
 	case g.policy == PolicyRequire && src == proxyproto.SourceDirect:
-		g.log.Printf("gateway: rejecting direct connection (policy=require) from %s", c.RemoteAddr())
+		g.log.Info("rejected: policy requires PROXY header", "remote", c.RemoteAddr(), "policy", g.policy.String())
 		return
 	case src == proxyproto.SourceDirect:
 		hdr = proxyproto.HeaderFromConn(c)
 	}
 
+	g.log.Info("accept", "remote", c.RemoteAddr(), "source", src, "policy", g.policy.String(), "upstream", g.upstream)
+
 	up, err := g.dialer.Dial("tcp", g.upstream)
 	if err != nil {
-		g.log.Printf("gateway: downstream dial %s failed: %v", g.upstream, err)
+		g.log.Warn("downstream dial failed", "upstream", g.upstream, "remote", c.RemoteAddr(), "err", err)
 		return
 	}
 	defer up.Close()
 
 	if err := g.writer.WriteTo(up, hdr); err != nil {
-		g.log.Printf("gateway: write v2 header to downstream: %v", err)
+		g.log.Error("write v2 header to downstream", "upstream", g.upstream, "err", err)
 		return
 	}
 

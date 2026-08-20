@@ -22,27 +22,42 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
-      - name: Build dev binary (linux/amd64)
+      - name: Build dev binary
         env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
           VERSION:      ${{ needs.ci.outputs.version }}
           BUILD_NUMBER: ${{ needs.ci.outputs.build_number }}
           COMMIT:       ${{ needs.ci.outputs.commit }}
           BUILD_TIME:   ${{ needs.ci.outputs.build_time }}
         run: |
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          out="proxydge-${VERSION}-${GOOS}-${GOARCH}${ext}"
           go build -trimpath -ldflags "\
             -X 'proxydge/internal/version.Version=${VERSION}' \
             -X 'proxydge/internal/version.BuildNumber=${BUILD_NUMBER}' \
             -X 'proxydge/internal/version.Commit=${COMMIT}' \
             -X 'proxydge/internal/version.BuildTime=${BUILD_TIME}'" \
-            -o proxydge-linux-amd64 .
-      - uses: actions/upload-artifact@v4
+            -o "$out" .
+          echo "built $out"
+      - uses: actions/upload-artifact@v6
         with:
-          name: proxydge-${{ needs.ci.outputs.version }}-linux-amd64
-          path: proxydge-linux-amd64
+          name: proxydge-${{ needs.ci.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: proxydge-*
           if-no-files-found: error

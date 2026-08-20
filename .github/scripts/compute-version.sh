@@ -19,7 +19,7 @@ BN="${BUILD_NUMBER:?BUILD_NUMBER is required}"
 latest_tag_core() {
   local t
   t="$(git describe --tags --abbrev=0 2>/dev/null || true)"
-  if [ -n "$t" ]; then echo "${t#v}"; else echo "0.1.0"; fi
+  if [ -n "$t" ]; then echo "${t#v}"; else echo "0.0.0"; fi
 }
 
 COMMIT="${COMMIT:-$(git rev-parse --short HEAD)}"

@@ -4,6 +4,11 @@
 /bin/
 /dist/
 
+# Local build artifacts (GoReleaser outputs go to /dist/)
+/proxydge
+/proxydge-linux-*
+/proxydge-windows-*
+
 # Test artifacts
 *.out
 coverage.txt

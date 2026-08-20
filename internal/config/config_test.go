@@ -194,7 +194,14 @@ func TestValidateBadPolicy(t *testing.T) {
 }
 
 func TestValidateGood(t *testing.T) {
-	c := Config{Listen: ":9000", Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second}
+	c := Config{
+		Listen:           ":9000",
+		Upstream:         "1.2.3.4:80",
+		Policy:           "use",
+		DetectTimeout:    time.Second,
+		LogConsoleLevel:  "info",
+		LogConsoleFormat: "text",
+	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid config: %v", err)
 	}

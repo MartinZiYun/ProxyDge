@@ -137,31 +137,6 @@ func TestValidateFileLevelOnlyWhenPathSet(t *testing.T) {
 	}
 }
 
-// --- -init ---
-
-func TestInitFlag(t *testing.T) {
-	c, err := Load([]string{"-init"})
-	if err != nil {
-		t.Fatalf("load -init: %v", err)
-	}
-	if !c.Init {
-		t.Fatal("Init should be true")
-	}
-	if c.InitPath == "" {
-		t.Fatal("InitPath should default to exe-dir config.yaml (non-empty)")
-	}
-}
-
-func TestInitFlagConfigPath(t *testing.T) {
-	c, err := Load([]string{"-init", "-config", "/tmp/sample.yaml"})
-	if err != nil {
-		t.Fatalf("load -init -config: %v", err)
-	}
-	if c.InitPath != "/tmp/sample.yaml" {
-		t.Fatalf("InitPath: want /tmp/sample.yaml, got %q", c.InitPath)
-	}
-}
-
 // --- WriteSample round-trip ---
 
 func TestWriteSampleRoundTrip(t *testing.T) {

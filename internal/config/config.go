@@ -37,10 +37,6 @@ type Config struct {
 	LogFilePath      string
 	LogFileLevel     string
 	LogFileFormat    string
-
-	// Init (meta): when true, main writes a sample config to InitPath and exits 0.
-	Init     bool
-	InitPath string
 }
 
 // Source overlays configuration fields it actually provides onto cfg. A Source
@@ -54,9 +50,8 @@ type Source interface {
 var ErrHelp = errors.New("config: help requested")
 
 // Load resolves configuration from all sources in precedence order and
-// validates the result. args are the program's CLI args. If -init is set, Load
-// short-circuits: it returns a Config with Init=true and InitPath set, and main
-// writes the sample (no further loading or validation runs).
+// validates the result. args are the `proxydge start` CLI args (after the
+// "start" subcommand).
 func Load(args []string) (*Config, error) {
 	cfg := &Config{}
 
@@ -65,8 +60,8 @@ func Load(args []string) (*Config, error) {
 		return nil, err
 	}
 
-	// Parse flags once (without applying) so we can (a) surface flag errors
-	// early and (b) read -config / -init before higher-precedence overlays run.
+	// Parse flags once (without applying) so we can surface flag errors early
+	// and read -config to locate the file before higher-precedence overlays run.
 	fv, set, err := parseFlags(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -75,16 +70,9 @@ func Load(args []string) (*Config, error) {
 		return nil, err
 	}
 
-	// -init: write a sample config and signal main to exit 0 (skip loading).
-	if set["init"] {
-		cfg.Init = true
-		cfg.InitPath = resolveInitPath(set, *fv.config)
-		return cfg, nil
-	}
-
 	// 2. file: path = -config (explicit, required) else exe-dir/config.yaml
 	//    (auto, optional).
-	path, optional := resolveConfigPath(set, *fv.config, defaultConfigPath())
+	path, optional := resolveConfigPath(set, *fv.config, DefaultConfigPath())
 	if path != "" {
 		if err := (fileSource{path: path, optional: optional}).Apply(cfg); err != nil {
 			return nil, fmt.Errorf("config: %w", err)
@@ -163,18 +151,9 @@ func resolveConfigPath(set map[string]bool, configFlag, defaultPath string) (pat
 	return defaultPath, true
 }
 
-// resolveInitPath is the path -init writes the sample to: -config if given, else
-// the exe-dir default.
-func resolveInitPath(set map[string]bool, configFlag string) string {
-	if set["config"] && configFlag != "" {
-		return configFlag
-	}
-	return defaultConfigPath()
-}
-
-// defaultConfigPath is the auto-discovered location: config.yaml next to the
-// running executable.
-func defaultConfigPath() string {
+// DefaultConfigPath is the auto-discovered location: config.yaml next to the
+// running executable. Exposed so the `init` subcommand can write a sample there.
+func DefaultConfigPath() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
@@ -367,16 +346,15 @@ func (envSource) Apply(c *Config) error {
 // flagValues are the parsed flag pointers (zero defaults: the flag source only
 // applies flags that were explicitly set).
 type flagValues struct {
-	listen, upstream, policy, config                    *string
-	detectTimeout                                        *time.Duration
-	logConsoleLevel, logConsoleFormat                    *string
-	logFilePath, logFileLevel, logFileFormat             *string
-	init                                                 *bool
+	listen, upstream, policy, config        *string
+	detectTimeout                            *time.Duration
+	logConsoleLevel, logConsoleFormat       *string
+	logFilePath, logFileLevel, logFileFormat *string
 }
 
 func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv := &flagValues{}
-	fs := flag.NewFlagSet("proxydge", flag.ContinueOnError)
+	fs := flag.NewFlagSet("proxydge start", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fv.listen = fs.String("listen", "", "listen address (host:port)")
 	fv.upstream = fs.String("upstream", "", "downstream target host:port (required)")
@@ -388,7 +366,6 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.logFilePath = fs.String("log-file", "", "file log path (empty=disabled)")
 	fv.logFileLevel = fs.String("log-file-level", "", "file log level: debug|info|warn|error")
 	fv.logFileFormat = fs.String("log-file-format", "", "file log format: text|json")
-	fv.init = fs.Bool("init", false, "write a sample config.yaml and exit")
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
 	}

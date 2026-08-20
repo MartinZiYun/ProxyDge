@@ -11,10 +11,14 @@ on:
         type: boolean
         required: true
     outputs:
-      version:      { value: ${{ jobs.meta.outputs.version }} }
-      build_number: { value: ${{ jobs.meta.outputs.build_number }} }
-      commit:       { value: ${{ jobs.meta.outputs.commit }} }
-      build_time:   { value: ${{ jobs.meta.outputs.build_time }} }
+      version:
+        value: ${{ jobs.meta.outputs.version }}
+      build_number:
+        value: ${{ jobs.meta.outputs.build_number }}
+      commit:
+        value: ${{ jobs.meta.outputs.commit }}
+      build_time:
+        value: ${{ jobs.meta.outputs.build_time }}
 
 jobs:
   meta:

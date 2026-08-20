@@ -64,7 +64,7 @@ internal/gateway/gateway_test.go        # 集成测试（真实 proxyproto adapt
 - `type Conn interface { io.Reader; io.Writer; io.Closer; LocalAddr() net.Addr; RemoteAddr() net.Addr; CloseWrite() error; SetReadDeadline(time.Time) error }`。`CloseWrite` 用于半关闭（下游看到 FIN）；`SetReadDeadline` 仅在 PROXY 头探测期间使用（见下）。
 - `type Listener interface { Accept() (Conn, error); Close() error; Addr() net.Addr }`。
 - `type Dialer interface { Dial(network, address string) (Conn, error) }`。
-- TCP 适配器：`Listen(network, addr) (Listener, error)` 包 `net.Listen`；`tcpConn` 包 `*net.TCPConn`；`Dialer` 用 `net.Dial`。
+- TCP 适配器：`Listen(network, addr) (Listener, error)` 包 `net.Listen`（内部 `tcpListener` 持 `*net.TCPListener`）；`*net.TCPConn` 直接满足 `Conn`，无需额外 wrapper（`tcpListener.Accept` 经 `AcceptTCP` 返回 `*net.TCPConn`）；`TCPDialer.Dial` 用 `net.Dial` 并类型断言为 `*net.TCPConn`。
 
 ### 探测逻辑与 policy（adapter 实现 Reader，Gateway 落地 policy）
 

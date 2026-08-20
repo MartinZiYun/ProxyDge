@@ -21,3 +21,13 @@ func TestRunValidPolicyAccepted(t *testing.T) {
 		t.Fatalf("bad listen: want exit 1 (runtime), got %d", code)
 	}
 }
+
+func TestRunEnvProvidesUpstream(t *testing.T) {
+	// Upstream supplied via env (no -upstream flag); validation must pass and
+	// reach the listener. A bad listen forces exit 1, proving env was read.
+	t.Setenv("PROXYDGE_UPSTREAM", "127.0.0.1:1")
+	if code := run([]string{"-listen", "bad-listen"}); code != 1 {
+		t.Fatalf("env upstream + bad listen: want exit 1, got %d", code)
+	}
+}
+

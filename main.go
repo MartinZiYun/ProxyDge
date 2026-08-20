@@ -6,14 +6,13 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
+	"proxydge/internal/config"
 	"proxydge/internal/gateway"
 	"proxydge/internal/proxyproto/goproxyproto"
 	"proxydge/internal/transport"
@@ -23,35 +22,20 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// run parses flags, wires the adapters, and serves until a signal arrives or
-// the listener fails. It returns the process exit code (2 for usage errors,
-// 1 for runtime errors, 0 on clean shutdown). Wired here so tests can cover
-// the flag/exit-code paths without touching the network.
+// run loads configuration (CLI > env > file > defaults, see internal/config),
+// wires the adapters, and serves until a signal arrives or the listener fails.
+// Exit codes: 0 clean shutdown, 2 usage/config error, 1 runtime error.
 func run(args []string) int {
-	fs := flag.NewFlagSet("proxydge", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	listen := fs.String("listen", ":9000", "listen address (host:port)")
-	upstream := fs.String("upstream", "", "downstream target host:port (required)")
-	policyStr := fs.String("policy", "use", "upstream header policy: use|require|reject")
-	detectTimeout := fs.Duration("detect-timeout", time.Second, "PROXY header detection timeout")
-
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
+	cfg, err := config.Load(args)
+	if err != nil {
+		if errors.Is(err, config.ErrHelp) {
 			return 0
 		}
-		return 2
-	}
-	if *upstream == "" {
-		fmt.Fprintln(os.Stderr, "proxydge: -upstream is required")
-		return 2
-	}
-	policy, ok := parsePolicy(*policyStr)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "proxydge: invalid -policy %q (use|require|reject)\n", *policyStr)
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 
-	ln, err := transport.Listen("tcp", *listen)
+	ln, err := transport.Listen("tcp", cfg.Listen)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: listen: %v\n", err)
 		return 1
@@ -60,7 +44,7 @@ func run(args []string) int {
 	g := gateway.New(
 		ln, transport.TCPDialer{},
 		goproxyproto.NewReader(), goproxyproto.NewWriter(),
-		policy, *upstream, *detectTimeout, logger,
+		gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, logger,
 	)
 
 	errc := make(chan error, 1)
@@ -85,14 +69,15 @@ func run(args []string) int {
 	return 0
 }
 
-func parsePolicy(s string) (gateway.Policy, bool) {
+// gatewayPolicy maps the validated policy string to the gateway's enum. It is
+// in main (not the config package) so the gateway stays free of config imports.
+func gatewayPolicy(s string) gateway.Policy {
 	switch s {
-	case "use":
-		return gateway.PolicyUse, true
 	case "require":
-		return gateway.PolicyRequire, true
+		return gateway.PolicyRequire
 	case "reject":
-		return gateway.PolicyReject, true
+		return gateway.PolicyReject
+	default:
+		return gateway.PolicyUse
 	}
-	return 0, false
 }

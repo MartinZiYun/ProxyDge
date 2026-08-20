@@ -1,6 +1,6 @@
 ---
 feature: proxy-protocol-normalizer
-status: designed
+status: in-progress
 updated: 2026-08-20
 branch: feat/proxy-protocol-normalizer
 commits:
@@ -26,7 +26,8 @@ commits:
 
 - CLI flag `-listen <addr>`：监听地址，如 `:9000` 或 `0.0.0.0:9000`，默认 `:9000`。
 - CLI flag `-upstream <host:port>`：下游目标，**必填**，缺省则启动报错退出码 2。
-- 仅 TCP。日志打到 stderr，每连接一行：accept（含检测到的来源类型）、upstream 拨号失败/成功、转发结束原因。
+- CLI flag `-policy <use|require|reject>`：上游 PROXY 头策略，默认 `use`（见「探测逻辑与 policy」）。
+- 仅 TCP。日志打到 stderr，每连接一行：accept（含检测到的来源类型与 policy 判定）、upstream 拨号失败/成功、转发结束原因。
 
 ### 架构：库隔离抽象（用户硬性要求）
 
@@ -35,25 +36,27 @@ commits:
 包布局（module `proxydge`）：
 
 ```
-main.go                                  # 组合根：解析 flag、装配 adapter、跑 Gateway、信号处理
-internal/proxyproto/proxyproto.go        # 自有 Header 类型 + Reader/Writer 接口 + HeaderFromConn
+main.go                                  # 组合根：解析 flag、装配 adapter 与 policy、跑 Gateway、信号处理
+internal/proxyproto/proxyproto.go        # 自有 Header/TLV 类型 + Reader/Writer 接口 + HeaderFromConn
 internal/proxyproto/goproxyproto/        # 适配器：用 go-proxyproto 实现 proxyproto.Reader/Writer
 internal/transport/transport.go          # 自有 Conn/Listener/Dialer 接口 + TCP 适配器
-internal/gateway/gateway.go             # 监听循环 + 每连接处理器，只依赖上述接口
+internal/gateway/gateway.go             # 监听循环 + 每连接处理器 + policy 落地，只依赖上述接口
 internal/gateway/gateway_test.go        # 集成测试（真实 proxyproto adapter + 假下游记录器 + 假 transport）
 ```
 
 `internal/proxyproto`（协议抽象，零第三方依赖）：
 
 - `type Family int`：`FamilyUnspec`、`FamilyTCP4`、`FamilyTCP6`。
-- `type Header struct { SrcIP, DstIP net.IP; SrcPort, DstPort uint16; Family Family }`。
+- `type TLV struct { Type byte; Value []byte }`：第一版解析不填充、序列化不输出，**架构预留**，未来加 TLV forwarding 不必改 Header 形状。
+- `type Header struct { SrcIP, DstIP net.IP; SrcPort, DstPort uint16; Family Family; TLVs []TLV }`。
 - `type Source int`：`SourceDirect`、`SourceV1`、`SourceV2`（仅用于日志/测试，不进 wire）。
 - `type Reader interface { Read(br *bufio.Reader) (hdr Header, src Source, err error) }`
   - 用 `*bufio.Reader` 以便探测时多读的字节留在缓冲、后续应用层读取可继续取用。
-  - 返回约定：`err==nil` 表示成功；`src==SourceDirect` 表示无 PROXY 头（直连），此时 `hdr` 为零值；`err!=nil` 表示**畸形**头（magic 对上但解析失败）。
+  - 返回约定：`err==nil` 表示成功；`src==SourceDirect` 表示无 PROXY 头（直连），此时 `hdr` 为零值；`err!=nil` 表示**畸形**头（magic 对上但解析失败或不完整）。
 - `type Writer interface { WriteTo(w io.Writer, hdr Header) error }`：**始终写 v2**。
-- `func HeaderFromConn(c transport.Conn) Header`：用 `c.RemoteAddr()` 作 Src、`c.LocalAddr()` 作 Dst，按地址族映射 `FamilyTCP4/TCP6`，填入 `Header`。供直连分支构造头使用。
-- adapter 在 `goproxyproto` 子包：`func NewReader() proxyproto.Reader`、`func NewWriter() proxyproto.Writer`。Gateway 只持有 `proxyproto.Reader`/`proxyproto.Writer` 接口，由 `main` 注入 `goproxyproto.NewReader()/NewWriter()` 实例。
+- `type AddrConn interface { LocalAddr() net.Addr; RemoteAddr() net.Addr }`：最小接口，`transport.Conn` 天然满足，避免 `proxyproto`→`transport` 的 import 环。
+- `func HeaderFromConn(c AddrConn) Header`：用 `c.RemoteAddr()` 作 Src、`c.LocalAddr()` 作 Dst，按地址族映射 `FamilyTCP4/TCP6`，填入 `Header`。供直连分支构造头使用。
+- adapter 在 `goproxyproto` 子包：`func NewReader() proxyproto.Reader`、`func NewWriter() proxyproto.Writer`。Gateway 只持有 `proxyproto.Reader`/`proxyproto.Writer` 接口与 policy 值，由 `main` 注入 `goproxyproto.NewReader()/NewWriter()` 实例与 policy。
 
 `internal/transport`（传输抽象，零第三方依赖）：
 
@@ -62,28 +65,40 @@ internal/gateway/gateway_test.go        # 集成测试（真实 proxyproto adapt
 - `type Dialer interface { Dial(network, address string) (Conn, error) }`。
 - TCP 适配器：`Listen(network, addr) (Listener, error)` 包 `net.Listen`；`tcpConn` 包 `*net.TCPConn`；`Dialer` 用 `net.Dial`。
 
-### 探测逻辑（adapter 实现，契约在 proxyproto 层）
+### 探测逻辑与 policy（adapter 实现 Reader，Gateway 落地 policy）
 
-对每个上游连接，用 `bufio.NewReader(c)` 包装后调 `Reader.Read(br)`。adapter 内部探测方式（实现细节，但行为契约固定）：
+`Reader.Read(br *bufio.Reader)` 的探测采用**渐进式 Peek**，避免「无脑等够 6 字节」把直连流量卡住——网络数据是分片的，对端可能当前只发了 1～2 字节，而首字节已足以排除 PROXY：
 
-1. `br.Peek(6)`。
-2. 若前 6 字节 == `"PROXY "`（`50 52 4F 58 59 20`）→ v1：交给 go-proxyproto 解析文本头 → 映射为 `Header`，`src=SourceV1`。畸形 → 返回 `err`。
-3. 若前 6 字节 == v2 签名前缀 `\r\n\r\n\x00\r\n`（`0D 0A 0D 0A 00 0D 0A` 的前 6 = `0D 0A 0D 0A 00 0D`）→ 确认 v2 签名（再 Peek(12) 比对完整 12 字节签名 `0D0A0D0A000D0A5154585450`），交给 go-proxyproto 解析二进制头 → 映射为 `Header`，`src=SourceV2`。畸形 → 返回 `err`。
-4. 否则 → 无 PROXY 头（直连）：返回 `hdr` 零值、`src=SourceDirect`、`err=nil`；**不消费任何字节**（`br` 保留 Peek 的数据，应用层随后的 `io.Copy` 自然读走）。
+1. `b1, _ := br.Peek(1)`：只在「对端一个字节都没发」时阻塞；一旦有 1 字节即可判定。
+2. `switch b1[0]`：
+   - `default`（既非 `'P'`=0x50 也非 `'\r'`=0x0D）→ **直连**：返回 `SourceDirect` + 零值 hdr，`br` 未消费（Peek 的字节保留给后续 `io.Copy`）。这一步覆盖绝大多数直连流量，零多余等待。
+   - `'P'` → v1 候选：`br.Peek(6)`，若为 `"PROXY "`（`50 52 4F 58 59 20`）确认 v1 → 交 go-proxyproto 解析文本头 → `SourceV1`；若前缀不匹配（含 EOF 已读部分不等于 `"PROXY "`）→ 直连（首字节 'P' 但不是 PROXY 头，属应用数据）；若前缀匹配但不完整（对端声称 v1 却没发够）→ 畸形 `err`。
+   - `'\r'` → v2 候选：`br.Peek(12)`，若等于完整签名 `0D0A0D0A000D0A5154585450` 确认 v2 → 交 go-proxyproto 解析二进制头 → `SourceV2`；前缀不匹配 → 直连；匹配但不完整 → 畸形 `err`。
 
-畸形（magic 对上但 go-proxyproto 解析失败）→ 返回 `err`；Gateway 关闭该连接并记日志，**不**回退为直连（发送方声称带了头却解析失败，不能信任其字节）。
+「前缀匹配但不完整」视为畸形而非直连：发送方已声明带 PROXY 头却未发完整，不可信。
 
-> 说明：选择「自己 Peek magic + 仅把已确认的头交给 go-proxyproto 解析」而非「直接用库的 optional-header 读取」，是为了让「有/无头」的判定由我们的简单 magic 比较掌控、行为确定；库只负责它擅长的「已确认头的 wire 解析」与「v2 序列化」。换库时，新 adapter 只需复刻同一契约。
+PROXY Protocol 规范本身**不鼓励接收端「猜测有无 Header」**，故本设计把「是否允许带 Header」显式化为 **policy**，由 Gateway 在拿到 `Source` 后决定，回答「谁允许发 PROXY Header」：
+
+- `policy=use`（默认，对应 S1 三种都收）：`Direct`→用 `HeaderFromConn`；`V1/V2`→用解析出的 hdr；畸形 `err`→关闭。
+- `policy=require`：必须带 PROXY 头。`Direct`→关闭（拒绝）；`V1/V2`→用 hdr；畸形→关闭。
+- `policy=reject`：禁止带 PROXY 头（防上游滥用伪造源）。`V1/V2`→关闭；`Direct`→用 `HeaderFromConn`；畸形→关闭。
+
+policy 由 `main` 注入 Gateway（构造时传入），adapter 的 Reader 不感知 policy，只如实报告 `Source`。
+
+> 关于 go-proxyproto 自带 policy：其 Listener wrapper 的 Policy 字段语义与上述一致，但本设计选择「自己渐进 Peek + 仅把已确认头交库解析」，以把判定时序与 policy 归于自有抽象、可独立于库演进；库只负责它擅长的「已确认头的 wire 解析」与「v2 序列化」。换库时新 adapter 复刻同一契约即可。
 
 ### 每连接处理（Gateway）
 
 ```
 accept c (transport.Conn)
 br := bufio.NewReader(c)
-hdr, src, err := reader.Read(br)            // 直连返回 SourceDirect + 零值 hdr
-if err != nil: log + close(c); return
-if src == SourceDirect:
-    hdr = proxyproto.HeaderFromConn(c)      // 真实 peer + 真实 local 地址
+hdr, src, err := reader.Read(br)            // 渐进 Peek 探测
+switch {
+case err != nil:                              log + close(c); return        // 畸形 → 关闭
+case policy == reject  && src != SourceDirect: log + close(c); return       // reject + 带头 → 关闭
+case policy == require && src == SourceDirect: log + close(c); return      // require + 无头 → 关闭
+case src == SourceDirect: hdr = proxyproto.HeaderFromConn(c)               // use/reject + 直连 → socket 地址
+}
 up, err := dialer.Dial("tcp", upstream)
 if err != nil: log + close(c); return
 if err := writer.WriteTo(up, hdr); err != nil: log + close both; return
@@ -129,13 +144,13 @@ C0 00 02 01  C6 33 64 01  04 D2  1F 90
 - **多下游/按目标路由**：单一固定下游，不根据 PROXY 头里的目的地址做路由。
 - **下游鉴权 / 连接池 / keepalive 复用**：每上游连接新建一条下游连接。
 - **配置文件 / 多监听端口 / 热重载**：仅 CLI flag。
-- **PROXY v1 输出 / TLV 透传自定义**：只输出标准 v2 头，不搬运上游 TLV。
+- **PROXY v1 输出 / TLV forwarding**：只输出标准 v2 头，不搬运上游 TLV；`Header.TLVs` 字段仅为架构预留，第一版不填充不输出。
 - **限流 / 速率 / ACL**：无。
 
 ## Tasks
 
-- [ ] T1: `internal/proxyproto` 协议抽象 —— `Header`/`Family`/`Source` 类型 + `Reader`/`Writer` 接口 + `HeaderFromConn`。验收：`go build ./internal/proxyproto/...` 通过；`HeaderFromConn` 对假 TCP4/TCP6 conn 的单元测试给出正确族与地址（covers: S2 抽象）
-- [ ] T2: `internal/proxyproto/goproxyproto` 适配器 —— `NewReader()/NewWriter()`，用 go-proxyproto 实现已确认头的解析与 v2 序列化；Reader 内部 Peek magic 判定 v1/v2/直连/畸形。验收：用规范手算字节做 oracle 的单元测试——v1 样例与 v2 样例解析出正确 `Header`；`Writer.WriteTo` 对 TCP4/TCP6 样例输出等于上文 wire 格式字面量；直连样例返回 `SourceDirect` 且不消费字节；畸形样例返回 `err`（covers: S2 探测、S2 wire；depends: T1）
+- [ ] T1: `internal/proxyproto` 协议抽象 —— `Header`/`Family`/`Source`/`TLV` 类型（`Header` 含预留 `TLVs []TLV` 字段）+ `Reader`/`Writer` 接口 + `HeaderFromConn`。验收：`go build ./internal/proxyproto/...` 通过；`HeaderFromConn` 对假 TCP4/TCP6 conn 的单元测试给出正确族与地址（covers: S2 抽象）
+- [ ] T2: `internal/proxyproto/goproxyproto` 适配器 —— `NewReader()/NewWriter()`，用 go-proxyproto 实现已确认头的解析与 v2 序列化；Reader 内部**渐进 Peek**（Peek(1) 短路直连，候选 `'P'`/`'\r'` 再 Peek(6/12) 确认）判定 v1/v2/直连/畸形，不无脑等够 6 字节。验收：规范手算字节做 oracle 的单元测试——v1/v2 样例解析出正确 `Header`；`Writer.WriteTo` 对 TCP4/TCP6 样例输出等于上文 wire 字面量；首字节为 `0x01` 的直连样例仅 Peek(1) 即返回 `SourceDirect` 且不消费字节；`"PROXY "` 前缀匹配但不完整返回 `err`（covers: S2 探测逻辑与 policy 的探测部分、S2 wire；depends: T1）
 - [ ] T3: `internal/transport` 传输抽象 —— `Conn`/`Listener`/`Dialer` 接口 + TCP 适配器（`Listen`、`tcpConn`、Dialer 用 `net.Dial`）。验收：`go build` 通过；用真实 `net.Listen` + 适配器 + `io.Copy` 往返字节、并验证 `CloseWrite` 把 FIN 传到对端的单元测试（covers: S2 抽象）
-- [ ] T4: `internal/gateway` 监听循环 + 每连接处理器，只依赖 `proxyproto`/`transport` 接口。验收：集成测试用假下游记录器，分别以直连/v1/v2 三种方式连入、发一段 payload、断言下游收到合法 v2 头（Src/Dst 正确）+ payload；并断言下游回写的响应能回到客户端；半关闭时下游看到 FIN（covers: S2 每连接处理、S2 直连头语义、S2 半关闭；depends: T1,T2,T3）
-- [ ] T5: `main.go` 组合根 + CLI flag（`-listen`/`-upstream`）+ 装配 adapter + 信号 graceful shutdown。验收：`go build ./...` 与 `go vet ./...` 通过；`-upstream` 缺省时退出码 2；所有测试通过；smoke：起一个 echo 下游，`proxydge -listen :9001 -upstream 127.0.0.1:<echo>`，直连/v1/v2 三种客户端均能经下游收到正确 v2 头（covers: S2 配置、S2 错误与生命周期；depends: T4）
+- [ ] T4: `internal/gateway` 监听循环 + 每连接处理器（构造时注入 policy），只依赖 `proxyproto`/`transport` 接口。验收：集成测试用假下游记录器——`use` policy 下分别以直连/v1/v2 连入、发 payload、断言下游收到合法 v2 头（Src/Dst 正确）+ payload、响应能回客户端、半关闭下游见 FIN；另测 `require` 拒绝直连、`reject` 拒绝带 v2 头的连接（covers: S2 探测逻辑与 policy、S2 每连接处理、S2 直连头语义、S2 半关闭；depends: T1,T2,T3）
+- [ ] T5: `main.go` 组合根 + CLI flag（`-listen`/`-upstream`/`-policy`）+ 装配 adapter 与 policy 注入 + 信号 graceful shutdown。验收：`go build ./...` 与 `go vet ./...` 通过；`-upstream` 缺省退出码 2；非法 `-policy` 退出码 2；所有测试通过；smoke：起 echo 下游，`proxydge -listen :9001 -upstream 127.0.0.1:<echo>`，直连/v1/v2 三种客户端均经下游收到正确 v2 头（covers: S2 配置、S2 探测逻辑与 policy、S2 错误与生命周期；depends: T4）

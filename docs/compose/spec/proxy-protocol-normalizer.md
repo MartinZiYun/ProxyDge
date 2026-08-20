@@ -1,14 +1,31 @@
 ---
 feature: proxy-protocol-normalizer
-status: in-progress
+status: delivered
 updated: 2026-08-20
 branch: feat/proxy-protocol-normalizer
-commits:
+commits: 99b5be5..37cb8a6
 ---
 
 # Proxy Protocol Normalizer (ProxyDge)
 
 ## Report
+
+**What was built** — ProxyDge 是一个 PROXY Protocol 归一化网关（Go，module `proxydge`）。监听一个 TCP 端口，接收上游连接（直连 / PROXY v1 / PROXY v2），统一归一化为 PROXY Protocol v2，连单一可配置下游、先写 v2 头、再双向透传（含 TCP 半关闭）。go-proxyproto 库被挡在自有抽象后面：`internal/proxyproto`（`Header`/`TLV`/`Family`/`Source`/`AddrConn` + `Reader`/`Writer` 接口 + `HeaderFromConn`）、`internal/transport`（`Conn`/`Listener`/`Dialer` 接口 + TCP 适配器）、`internal/gateway`（监听循环 + 每连接处理器 + policy），仅 `internal/proxyproto/goproxyproto` 适配器子包 import 库——换库只改该子包。policy（`use`/`require`/`reject`，默认 `use`）回答「谁允许发 PROXY Header」。探测委托 `proxyproto.Read`（库自带 Peek(1) 短路直连），`ErrNoProxyProtocol`→直连不消费字节；畸形→关闭不回退。`main.go` 为组合根：`-listen`/`-upstream`/`-policy`/`-detect-timeout` flag + 适配器/policy/detectTimeout 注入 + SIGINT/SIGTERM 优雅关闭 + 退出码（用法错误 2、运行错误 1）。
+
+**Verification** —
+- `go build ./...` → PASS（exit 0）
+- `go vet ./...` → PASS（exit 0）
+- `go test -count=1 ./...` → PASS，19 个测试横跨 5 个包（proxyproto / goproxyproto / transport / gateway / main）
+- 真实二进制 v2 端到端 smoke → PASS（下游收到 32 字节 = 28 字节 v2 头 + "PING"，回声回到客户端）
+- 子代理审查（general-1）覆盖 `99b5be5..c13fba1`：5 个任务全部 MET、无 critical；partial-candidate-timeout 死锁风险经实证反驳（Peek 字节保留、转发无丢字、无提前下游 FIN）。
+- 审查后 nit 清理 commit `37cb8a6`（机械拆分 reader/writer 文件 + 删除审查者遗留的一次性 `cmd/` probe + 校准 spec 传输说明；无逻辑改动）已 re-verify（build/vet/19 测试 PASS）。
+
+**Journey log** —
+1. **库隔离抽象先行**：按用户硬性要求，把 go-proxyproto 挡在 `internal/proxyproto/goproxyproto` 后面，业务代码只依赖 `proxyproto`/`transport` 接口。用最小 `AddrConn` 接口（仅 LocalAddr/RemoteAddr）避免 `proxyproto`→`transport` import 环。
+2. **v2 签名记错被 oracle 捕获**：第一版把 PROXY v2 12 字节签名写成 `...5154585450`（"QTXTP"），实际是 `...515549540a`（"QUIT\n"）。T2 的「按规范手算字节做 oracle、不调库」测试立即失败并定位——oracle 独立于库的价值在此兑现。
+3. **Peek(6) 不阻塞→委托库的 Peek(1)**：用户指出首字节即可排除 PROXY、不应为直连流量引入多余阻塞。查 go-proxyproto 源码发现其 `Read` 注释明确「为小包非 PROXY 流量先只 Peek 1 字节」——委托库即满足，无需自写探测。
+4. **候选前缀不完整的真死锁**：直连客户端发 `'P'` 开头短命令后等响应时，库 `Peek(5)` 无限阻塞。`gop.ReadTimeout` 会留遗弃 goroutine 操作 `bufio.Reader`（并发不安全）。改用 `SetReadDeadline(now+detectTimeout)` 包住 `reader.Read`、返回后清零，让 `Peek` 本身在 deadline 返回；adapter 把超时映射为 `SourceDirect`（Peek 不消费、字节随管道转发）。无遗留 goroutine、无丢字。
+5. **直连用真实地址、绝不 UNSPEC**：归一化的目的就是保住客户端真实信息，直连时套接字 RemoteAddr/LocalAddr 即真实信息；UNSPEC 仅用于「无法判定」，本设计不产生该情况。
 
 ## [S1] Problem
 
@@ -155,8 +172,8 @@ C0 00 02 01  C6 33 64 01  04 D2  1F 90
 
 ## Tasks
 
-- [ ] T1: `internal/proxyproto` 协议抽象 —— `Header`/`Family`/`Source`/`TLV` 类型（`Header` 含预留 `TLVs []TLV` 字段）+ `Reader`/`Writer` 接口 + `HeaderFromConn`。验收：`go build ./internal/proxyproto/...` 通过；`HeaderFromConn` 对假 TCP4/TCP6 conn 的单元测试给出正确族与地址（covers: S2 抽象）
-- [ ] T2: `internal/proxyproto/goproxyproto` 适配器 —— `NewReader()/NewWriter()`；Reader 委托 `proxyproto.Read`（库自带 Peek(1) 短路直连）做探测+解析、`ErrNoProxyProtocol`→`SourceDirect` 不消费字节、其它 err→畸形；Writer 用 `proxyproto.HeaderProxyFromAddrs(2, src, dst)` + `WriteTo` 做 v2 序列化。验收：规范手算字节做 oracle 的单元测试——v1/v2 样例解析出正确 `Header` 且应用数据仍留在 br；`Writer.WriteTo` 对 TCP4/TCP6 样例输出等于上文 wire 字面量；首字节 `0x01` 的直连样例返回 `SourceDirect` 且不消费字节；签名命中但解析失败返回 `err`（covers: S2 探测逻辑与 policy 的探测部分、S2 wire；depends: T1）
-- [ ] T3: `internal/transport` 传输抽象 —— `Conn`/`Listener`/`Dialer` 接口 + TCP 适配器（`Listen`、`tcpConn`、`TCPDialer`）；`Conn` 含 `SetReadDeadline`。验收：`go build` 通过；用真实 `net.Listen` + 适配器 + `io.Copy` 往返字节、并验证 `CloseWrite` 把 FIN 传到对端的单元测试（covers: S2 抽象）
-- [ ] T4: `internal/gateway` 监听循环 + 每连接处理器（构造时注入 policy 与 detectTimeout、探测期间设/清读超时），只依赖 `proxyproto`/`transport` 接口。验收：集成测试用假下游记录器——`use` policy 下分别以直连/v1/v2 连入、发 payload、断言下游收到合法 v2 头（Src/Dst 正确）+ payload、响应能回客户端、半关闭下游见 FIN；另测 `require` 拒绝直连、`reject` 拒绝带 v2 头的连接；并测「候选前缀不完整且不发更多字节」（如直连发 `PING` 后等响应）在 detectTimeout 后被当作直连转发、不死锁（covers: S2 探测逻辑与 policy、S2 探测超时、S2 每连接处理、S2 直连头语义、S2 半关闭；depends: T1,T2,T3）
-- [ ] T5: `main.go` 组合根 + CLI flag（`-listen`/`-upstream`/`-policy`/`-detect-timeout`）+ 装配 adapter 与 policy/detectTimeout 注入 + 信号 graceful shutdown。验收：`go build ./...` 与 `go vet ./...` 通过；`-upstream` 缺省退出码 2；非法 `-policy` 退出码 2；所有测试通过；smoke：起 echo 下游，`proxydge -listen :9001 -upstream 127.0.0.1:<echo>`，直连/v1/v2 三种客户端均经下游收到正确 v2 头（covers: S2 配置、S2 探测逻辑与 policy、S2 错误与生命周期；depends: T4）
+- [x] T1: `internal/proxyproto` 协议抽象 —— `Header`/`Family`/`Source`/`TLV` 类型（`Header` 含预留 `TLVs []TLV` 字段）+ `Reader`/`Writer` 接口 + `HeaderFromConn`。验收：`go build ./internal/proxyproto/...` 通过；`HeaderFromConn` 对假 TCP4/TCP6 conn 的单元测试给出正确族与地址（covers: S2 抽象）
+- [x] T2: `internal/proxyproto/goproxyproto` 适配器 —— `NewReader()/NewWriter()`；Reader 委托 `proxyproto.Read`（库自带 Peek(1) 短路直连）做探测+解析、`ErrNoProxyProtocol`→`SourceDirect` 不消费字节、其它 err→畸形；Writer 用 `proxyproto.HeaderProxyFromAddrs(2, src, dst)` + `WriteTo` 做 v2 序列化。验收：规范手算字节做 oracle 的单元测试——v1/v2 样例解析出正确 `Header` 且应用数据仍留在 br；`Writer.WriteTo` 对 TCP4/TCP6 样例输出等于上文 wire 字面量；首字节 `0x01` 的直连样例返回 `SourceDirect` 且不消费字节；签名命中但解析失败返回 `err`（covers: S2 探测逻辑与 policy 的探测部分、S2 wire；depends: T1）
+- [x] T3: `internal/transport` 传输抽象 —— `Conn`/`Listener`/`Dialer` 接口 + TCP 适配器（`Listen`、`tcpConn`、`TCPDialer`）；`Conn` 含 `SetReadDeadline`。验收：`go build` 通过；用真实 `net.Listen` + 适配器 + `io.Copy` 往返字节、并验证 `CloseWrite` 把 FIN 传到对端的单元测试（covers: S2 抽象）
+- [x] T4: `internal/gateway` 监听循环 + 每连接处理器（构造时注入 policy 与 detectTimeout、探测期间设/清读超时），只依赖 `proxyproto`/`transport` 接口。验收：集成测试用假下游记录器——`use` policy 下分别以直连/v1/v2 连入、发 payload、断言下游收到合法 v2 头（Src/Dst 正确）+ payload、响应能回客户端、半关闭下游见 FIN；另测 `require` 拒绝直连、`reject` 拒绝带 v2 头的连接；并测「候选前缀不完整且不发更多字节」（如直连发 `PING` 后等响应）在 detectTimeout 后被当作直连转发、不死锁（covers: S2 探测逻辑与 policy、S2 探测超时、S2 每连接处理、S2 直连头语义、S2 半关闭；depends: T1,T2,T3）
+- [x] T5: `main.go` 组合根 + CLI flag（`-listen`/`-upstream`/`-policy`/`-detect-timeout`）+ 装配 adapter 与 policy/detectTimeout 注入 + 信号 graceful shutdown。验收：`go build ./...` 与 `go vet ./...` 通过；`-upstream` 缺省退出码 2；非法 `-policy` 退出码 2；所有测试通过；smoke：起 echo 下游，`proxydge -listen :9001 -upstream 127.0.0.1:<echo>`，直连/v1/v2 三种客户端均经下游收到正确 v2 头（covers: S2 配置、S2 探测逻辑与 policy、S2 错误与生命周期；depends: T4）

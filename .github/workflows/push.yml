@@ -48,7 +48,7 @@ jobs:
         run: |
           ext=""
           [ "$GOOS" = "windows" ] && ext=".exe"
-          out="proxydge-${VERSION}-${GOOS}-${GOARCH}${ext}"
+          out="proxydge-dev-${BUILD_NUMBER}-${GOOS}-${GOARCH}${ext}"
           go build -trimpath -ldflags "\
             -X 'proxydge/internal/version.Version=${VERSION}' \
             -X 'proxydge/internal/version.BuildNumber=${BUILD_NUMBER}' \
@@ -58,6 +58,6 @@ jobs:
           echo "built $out"
       - uses: actions/upload-artifact@v6
         with:
-          name: proxydge-${{ needs.ci.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: proxydge-dev-${{ needs.ci.outputs.build_number }}-${{ matrix.goos }}-${{ matrix.goarch }}
           path: proxydge-*
           if-no-files-found: error

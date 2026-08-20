@@ -14,7 +14,7 @@ builds:
     goos: [linux, windows]
     goarch: [amd64, arm64]
     ldflags:
-      - -s -w -trimpath
+      - -s -w
       - -X 'proxydge/internal/version.Version={{.Env.VERSION}}'
       - -X 'proxydge/internal/version.BuildNumber={{.Env.BUILD_NUMBER}}'
       - -X 'proxydge/internal/version.Commit={{.Env.COMMIT}}'
@@ -22,13 +22,13 @@ builds:
 
 archives:
   - id: default
-    builds: [proxydge]
+    ids: [proxydge]
     # name_template uses GoReleaser's .Version (tag without leading v).
     name_template: >-
       proxydge-{{ .Version }}-{{ .Os }}-{{ .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 checksum:
   name_template: 'checksums.txt'

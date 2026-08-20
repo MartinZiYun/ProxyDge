@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -37,6 +38,82 @@ type Config struct {
 	LogFilePath      string
 	LogFileLevel     string
 	LogFileFormat    string
+
+	// Diagnostics (not user-configurable). prov maps each field name to the
+	// source that last set it ("default" | "env" | "flag" | "file <path>");
+	// loadedFile is the config file actually read ("" if none). Printed at
+	// startup so an operator can see where every value came from.
+	prov       map[string]string
+	loadedFile string
+}
+
+// mark records that source provided field. Sources call this as they overlay,
+// so later (higher-precedence) sources overwrite earlier ones — prov[field]
+// ends up being the winning source.
+func (c *Config) mark(field, source string) {
+	if c.prov == nil {
+		c.prov = map[string]string{}
+	}
+	c.prov[field] = source
+}
+
+// configField pairs a field's display name with a value accessor, for Describe.
+type configField struct {
+	name  string
+	value func(*Config) any
+}
+
+// configFields is the single source of truth for field names + display order.
+// Sources mark fields using these exact names; Describe prints them in order.
+var configFields = []configField{
+	{"listen", func(c *Config) any { return c.Listen }},
+	{"upstream", func(c *Config) any { return c.Upstream }},
+	{"policy", func(c *Config) any { return c.Policy }},
+	{"detect-timeout", func(c *Config) any { return c.DetectTimeout }},
+	{"log.console.level", func(c *Config) any { return c.LogConsoleLevel }},
+	{"log.console.format", func(c *Config) any { return c.LogConsoleFormat }},
+	{"log.file.path", func(c *Config) any { return c.LogFilePath }},
+	{"log.file.level", func(c *Config) any { return c.LogFileLevel }},
+	{"log.file.format", func(c *Config) any { return c.LogFileFormat }},
+}
+
+// fieldName constants keep the Sources' mark() calls aligned with configFields.
+const (
+	fListen            = "listen"
+	fUpstream          = "upstream"
+	fPolicy            = "policy"
+	fDetectTimeout     = "detect-timeout"
+	fLogConsoleLevel   = "log.console.level"
+	fLogConsoleFormat  = "log.console.format"
+	fLogFilePath       = "log.file.path"
+	fLogFileLevel      = "log.file.level"
+	fLogFileFormat     = "log.file.format"
+)
+
+// Describe returns a human-readable dump of every config field with its value
+// and the source that provided it, plus the config file that was loaded (if
+// any). Intended for the startup banner.
+func (c *Config) Describe() string {
+	var b strings.Builder
+	b.WriteString("config file: ")
+	if c.loadedFile != "" {
+		b.WriteString(c.loadedFile)
+	} else {
+		b.WriteString("(none)")
+	}
+	b.WriteByte('\n')
+	for _, f := range configFields {
+		fmt.Fprintf(&b, "%s = %v (%s)\n", f.name, f.value(c), c.sourceOf(f.name))
+	}
+	return b.String()
+}
+
+// sourceOf returns the source label for a field (defaults to "default").
+func (c *Config) sourceOf(field string) string {
+	if s, ok := c.prov[field]; ok {
+		return s
+	}
+	return "default"
 }
 
 // Source overlays configuration fields it actually provides onto cfg. A Source
@@ -211,6 +288,10 @@ func (defaultsSource) Apply(c *Config) error {
 	c.LogFileLevel = "info"
 	c.LogFileFormat = "text"
 	// LogFilePath defaults to "" (file sink off).
+	// Every field originates from defaults; higher-precedence sources overwrite.
+	for _, f := range configFields {
+		c.mark(f.name, "default")
+	}
 	return nil
 }
 
@@ -260,14 +341,20 @@ func (s fileSource) Apply(c *Config) error {
 	if err := yaml.Unmarshal(data, &y); err != nil {
 		return fmt.Errorf("parse %s: %w", s.path, err)
 	}
+	// A file was actually loaded — record it for the startup banner.
+	c.loadedFile = s.path
+	src := "file " + s.path
 	if y.Listen != nil {
 		c.Listen = *y.Listen
+		c.mark(fListen, src)
 	}
 	if y.Upstream != nil {
 		c.Upstream = *y.Upstream
+		c.mark(fUpstream, src)
 	}
 	if y.Policy != nil {
 		c.Policy = *y.Policy
+		c.mark(fPolicy, src)
 	}
 	if y.DetectTimeout != nil {
 		d, derr := time.ParseDuration(*y.DetectTimeout)
@@ -275,25 +362,31 @@ func (s fileSource) Apply(c *Config) error {
 			return fmt.Errorf("parse %s: detect-timeout %q: %w", s.path, *y.DetectTimeout, derr)
 		}
 		c.DetectTimeout = d
+		c.mark(fDetectTimeout, src)
 	}
 	if y.Log != nil {
 		if y.Log.Console != nil {
 			if y.Log.Console.Level != nil {
 				c.LogConsoleLevel = *y.Log.Console.Level
+				c.mark(fLogConsoleLevel, src)
 			}
 			if y.Log.Console.Format != nil {
 				c.LogConsoleFormat = *y.Log.Console.Format
+				c.mark(fLogConsoleFormat, src)
 			}
 		}
 		if y.Log.File != nil {
 			if y.Log.File.Path != nil {
 				c.LogFilePath = *y.Log.File.Path
+				c.mark(fLogFilePath, src)
 			}
 			if y.Log.File.Level != nil {
 				c.LogFileLevel = *y.Log.File.Level
+				c.mark(fLogFileLevel, src)
 			}
 			if y.Log.File.Format != nil {
 				c.LogFileFormat = *y.Log.File.Format
+				c.mark(fLogFileFormat, src)
 			}
 		}
 	}
@@ -309,12 +402,15 @@ type envSource struct{}
 func (envSource) Apply(c *Config) error {
 	if v, ok := os.LookupEnv(envPrefix + "LISTEN"); ok && v != "" {
 		c.Listen = v
+		c.mark(fListen, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "UPSTREAM"); ok && v != "" {
 		c.Upstream = v
+		c.mark(fUpstream, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "POLICY"); ok && v != "" {
 		c.Policy = v
+		c.mark(fPolicy, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "DETECT_TIMEOUT"); ok && v != "" {
 		d, err := time.ParseDuration(v)
@@ -322,21 +418,27 @@ func (envSource) Apply(c *Config) error {
 			return fmt.Errorf("%sDETECT_TIMEOUT=%q: %w", envPrefix, v, err)
 		}
 		c.DetectTimeout = d
+		c.mark(fDetectTimeout, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "LOG_CONSOLE_LEVEL"); ok && v != "" {
 		c.LogConsoleLevel = v
+		c.mark(fLogConsoleLevel, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "LOG_CONSOLE_FORMAT"); ok && v != "" {
 		c.LogConsoleFormat = v
+		c.mark(fLogConsoleFormat, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "LOG_FILE"); ok && v != "" {
 		c.LogFilePath = v
+		c.mark(fLogFilePath, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "LOG_FILE_LEVEL"); ok && v != "" {
 		c.LogFileLevel = v
+		c.mark(fLogFileLevel, "env")
 	}
 	if v, ok := os.LookupEnv(envPrefix + "LOG_FILE_FORMAT"); ok && v != "" {
 		c.LogFileFormat = v
+		c.mark(fLogFileFormat, "env")
 	}
 	return nil
 }
@@ -382,33 +484,42 @@ type flagSource struct {
 func (s flagSource) Apply(c *Config) error {
 	if s.set["listen"] {
 		c.Listen = *s.fv.listen
+		c.mark(fListen, "flag")
 	}
 	if s.set["upstream"] {
 		c.Upstream = *s.fv.upstream
+		c.mark(fUpstream, "flag")
 	}
 	if s.set["policy"] {
 		c.Policy = *s.fv.policy
+		c.mark(fPolicy, "flag")
 	}
 	if s.set["detect-timeout"] {
 		c.DetectTimeout = *s.fv.detectTimeout
+		c.mark(fDetectTimeout, "flag")
 	}
 	if s.set["config"] {
 		c.ConfigPath = *s.fv.config
 	}
 	if s.set["log-console-level"] {
 		c.LogConsoleLevel = *s.fv.logConsoleLevel
+		c.mark(fLogConsoleLevel, "flag")
 	}
 	if s.set["log-console-format"] {
 		c.LogConsoleFormat = *s.fv.logConsoleFormat
+		c.mark(fLogConsoleFormat, "flag")
 	}
 	if s.set["log-file"] {
 		c.LogFilePath = *s.fv.logFilePath
+		c.mark(fLogFilePath, "flag")
 	}
 	if s.set["log-file-level"] {
 		c.LogFileLevel = *s.fv.logFileLevel
+		c.mark(fLogFileLevel, "flag")
 	}
 	if s.set["log-file-format"] {
 		c.LogFileFormat = *s.fv.logFileFormat
+		c.mark(fLogFileFormat, "flag")
 	}
 	return nil
 }

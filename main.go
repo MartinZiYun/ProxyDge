@@ -73,6 +73,12 @@ func cmdStart(args []string) int {
 		return 2
 	}
 
+	// Startup banner: version + loaded config file + per-field source. Printed
+	// to stderr (unconditional, for troubleshooting) before binding so it shows
+	// even if listen/serve later fails. Captured by journalctl.
+	fmt.Fprintf(os.Stderr, "proxydge %s\n", versionInfo())
+	fmt.Fprint(os.Stderr, cfg.Describe())
+
 	ln, err := transport.Listen("tcp", cfg.Listen)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: listen: %v\n", err)
@@ -141,10 +147,16 @@ func cmdInit(args []string) int {
 // cmdVersion prints build info. Uses runtime/debug.BuildInfo so the git revision
 // (when built from a VCS checkout) is embedded automatically — no ldflags.
 func cmdVersion(args []string) int {
+	fmt.Fprintf(out, "proxydge %s\n", versionInfo())
+	return 0
+}
+
+// versionInfo returns the version detail string (without the "proxydge " prefix):
+// "<version> (rev <sha>, modified=<bool>)" or "<version>" when no VCS info.
+func versionInfo() string {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		fmt.Fprintln(out, "proxydge (unknown)")
-		return 0
+		return "(unknown)"
 	}
 	ver := bi.Main.Version
 	if ver == "" {
@@ -152,11 +164,9 @@ func cmdVersion(args []string) int {
 	}
 	rev, modified := vcsInfo(bi)
 	if rev != "" {
-		fmt.Fprintf(out, "proxydge %s (rev %s, modified=%v)\n", ver, rev, modified)
-	} else {
-		fmt.Fprintf(out, "proxydge %s\n", ver)
+		return fmt.Sprintf("%s (rev %s, modified=%v)", ver, rev, modified)
 	}
-	return 0
+	return ver
 }
 
 // vcsInfo extracts the VCS revision (short) and dirty flag from build settings.

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # the reusable CI must push the build-counter branch
 
 jobs:
   ci:

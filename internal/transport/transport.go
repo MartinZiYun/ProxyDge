@@ -7,9 +7,11 @@ package transport
 import (
 	"fmt"
 	"net"
+	"time"
 )
 
-// Conn is a duplex byte stream with address access and half-close.
+// Conn is a duplex byte stream with address access, half-close, and read
+// deadline control (the deadline is used only during PROXY-header detection).
 // *net.TCPConn satisfies it directly.
 type Conn interface {
 	Read([]byte) (int, error)
@@ -18,6 +20,7 @@ type Conn interface {
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
 	CloseWrite() error
+	SetReadDeadline(time.Time) error
 }
 
 // Listener accepts inbound transport.Conn connections.

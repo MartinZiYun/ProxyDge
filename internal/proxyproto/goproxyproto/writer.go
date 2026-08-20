@@ -29,6 +29,13 @@ func (reader) Read(br *bufio.Reader) (pp.Header, pp.Source, error) {
 		if errors.Is(err, gop.ErrNoProxyProtocol) {
 			return pp.Header{}, pp.SourceDirect, nil
 		}
+		// A read deadline during detection (partial candidate prefix with no
+		// more bytes) is ambiguous, not malformed: treat as direct. Peek does
+		// not consume, so the bytes remain buffered for the subsequent pipe.
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			return pp.Header{}, pp.SourceDirect, nil
+		}
 		return pp.Header{}, 0, err
 	}
 	src, dst, ok := h.TCPAddrs()

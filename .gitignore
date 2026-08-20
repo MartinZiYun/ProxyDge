@@ -1,0 +1,19 @@
+# Go build output
+*.exe
+*.exe~
+/bin/
+/dist/
+
+# Test artifacts
+*.out
+coverage.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Linked worktrees
+/.worktrees/

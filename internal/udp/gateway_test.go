@@ -1,0 +1,506 @@
+package udp
+
+import (
+	"bytes"
+	"io"
+	"log/slog"
+	"net"
+	"testing"
+	"time"
+
+	"proxydge/internal/gateway"
+	"proxydge/internal/proxyproto"
+	"proxydge/internal/proxyproto/goproxyproto"
+)
+
+// --- helpers ---
+
+type receivedDatagram struct {
+	hasProxy bool
+	payload  []byte
+	srcIP    net.IP
+	srcPort  uint16
+}
+
+func startTestDownstream(t *testing.T) (addr string, recorded chan receivedDatagram) {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("downstream listen: %v", err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	recorded = make(chan receivedDatagram, 64)
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, peer, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			rd := receivedDatagram{payload: data}
+			// Check for PROXY v2 signature
+			if len(data) >= len(proxyV2Sig) && bytes.Equal(data[:len(proxyV2Sig)], proxyV2Sig) {
+				rd.hasProxy = true
+				dr := goproxyproto.NewDatagramReader()
+				hdr, payload, _, err := dr.ParseDatagram(data)
+				if err == nil {
+					rd.payload = payload
+					rd.srcIP = hdr.SrcIP
+					rd.srcPort = hdr.SrcPort
+				}
+			}
+			recorded <- rd
+			// Echo payload back to peer
+			_, _ = pc.WriteToUDP(rd.payload, peer)
+		}
+	}()
+	return pc.LocalAddr().String(), recorded
+}
+
+var proxyV2Sig = []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
+
+func startTestGateway(t *testing.T, downstream string, outputMode OutputMode, trust *gateway.TrustChecker) string {
+	t.Helper()
+	g, err := New(
+		"127.0.0.1:0", downstream,
+		gateway.PolicyUse, trust, gateway.UntrustedReject,
+		outputMode, 30*time.Second, 1024, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("gateway: %v", err)
+	}
+	t.Cleanup(func() { g.Close() })
+	go func() { _ = g.Serve() }()
+	// Give the gateway a moment to bind
+	time.Sleep(50 * time.Millisecond)
+	return g.listener.LocalAddr().String()
+}
+
+func startTestGatewayFull(t *testing.T, downstream string, outputMode OutputMode, policy gateway.Policy, trust *gateway.TrustChecker, untrusted gateway.UntrustedAction) string {
+	t.Helper()
+	g, err := New(
+		"127.0.0.1:0", downstream,
+		policy, trust, untrusted,
+		outputMode, 2*time.Second, 2, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("gateway: %v", err)
+	}
+	t.Cleanup(func() { g.Close() })
+	go func() { _ = g.Serve() }()
+	time.Sleep(50 * time.Millisecond)
+	return g.listener.LocalAddr().String()
+}
+
+func makeProxyDatagram(payload []byte) []byte {
+	hdr := proxyproto.Header{
+		SrcIP:   net.IPv4(192, 0, 2, 1),
+		DstIP:   net.IPv4(198, 51, 100, 1),
+		SrcPort: 1234,
+		DstPort: 8080,
+		Family:  proxyproto.FamilyUDP4,
+	}
+	encoded, err := goproxyproto.NewDatagramWriter().FormatDatagram(hdr, payload)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}
+
+func sendAndReceiveEcho(t *testing.T, gwAddr string, datagram []byte, timeout time.Duration) []byte {
+	t.Helper()
+	pc, err := net.Dial("udp", gwAddr)
+	if err != nil {
+		t.Fatalf("dial gateway: %v", err)
+	}
+	defer pc.Close()
+	if _, err := pc.Write(datagram); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	pc.SetReadDeadline(time.Now().Add(timeout))
+	buf := make([]byte, 65535)
+	n, err := pc.Read(buf)
+	if err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	return buf[:n]
+}
+
+// sendMultipleOnSameSocket sends multiple datagrams from the same UDP socket
+// (same source port → same session) and receives echoes. Used for first_datagram
+// output tests where headerSent state must persist across datagrams.
+func sendMultipleOnSameSocket(t *testing.T, gwAddr string, datagrams [][]byte, timeout time.Duration) [][]byte {
+	t.Helper()
+	pc, err := net.Dial("udp", gwAddr)
+	if err != nil {
+		t.Fatalf("dial gateway: %v", err)
+	}
+	defer pc.Close()
+	var echoes [][]byte
+	for _, dg := range datagrams {
+		if _, err := pc.Write(dg); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		pc.SetReadDeadline(time.Now().Add(timeout))
+		buf := make([]byte, 65535)
+		n, err := pc.Read(buf)
+		if err != nil {
+			t.Fatalf("read echo: %v", err)
+		}
+		echoes = append(echoes, buf[:n])
+	}
+	return echoes
+}
+
+func waitForRecorded(t *testing.T, recorded chan receivedDatagram, timeout time.Duration) receivedDatagram {
+	t.Helper()
+	select {
+	case rd := <-recorded:
+		return rd
+	case <-time.After(timeout):
+		t.Fatal("downstream did not receive within timeout")
+		return receivedDatagram{}
+	}
+}
+
+func assertNoRecorded(t *testing.T, recorded chan receivedDatagram, timeout time.Duration) {
+	t.Helper()
+	select {
+	case rd := <-recorded:
+		t.Fatalf("downstream unexpectedly received %d bytes (hasProxy=%v)", len(rd.payload), rd.hasProxy)
+	case <-time.After(timeout):
+	}
+}
+
+// --- 6 input×output combination tests ---
+
+func TestDirectToEvery(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGateway(t, downAddr, OutputEveryDatagram, nil)
+
+	payload := []byte("PING")
+	echo := sendAndReceiveEcho(t, gwAddr, payload, 2*time.Second)
+
+	rd := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd.hasProxy {
+		t.Fatal("downstream should receive PROXY header (every_datagram)")
+	}
+	if !bytes.Equal(rd.payload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, rd.payload)
+	}
+	if !bytes.Equal(echo, payload) {
+		t.Fatalf("echo: want %q, got %q", payload, echo)
+	}
+}
+
+func TestEveryToEvery(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGateway(t, downAddr, OutputEveryDatagram, nil)
+
+	payload := []byte("PING")
+	echo := sendAndReceiveEcho(t, gwAddr, makeProxyDatagram(payload), 2*time.Second)
+
+	rd := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd.hasProxy {
+		t.Fatal("downstream should receive PROXY header (every_datagram)")
+	}
+	if !bytes.Equal(rd.payload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, rd.payload)
+	}
+	if !bytes.Equal(echo, payload) {
+		t.Fatalf("echo: want %q, got %q", payload, echo)
+	}
+}
+
+func TestFirstToEvery(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGateway(t, downAddr, OutputEveryDatagram, nil)
+
+	// First datagram: [PROXY][P1]
+	p1 := []byte("PING1")
+	sendAndReceiveEcho(t, gwAddr, makeProxyDatagram(p1), 2*time.Second)
+	rd1 := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd1.hasProxy {
+		t.Fatal("first datagram: downstream should have PROXY header (every output)")
+	}
+	if !bytes.Equal(rd1.payload, p1) {
+		t.Fatalf("payload1: want %q, got %q", p1, rd1.payload)
+	}
+
+	// Second datagram: raw [P2] (first_datagram input mode — no header on subsequent)
+	p2 := []byte("PING2")
+	sendAndReceiveEcho(t, gwAddr, p2, 2*time.Second)
+	rd2 := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd2.hasProxy {
+		t.Fatal("second datagram: downstream should still have PROXY header (every output mode)")
+	}
+	if !bytes.Equal(rd2.payload, p2) {
+		t.Fatalf("payload2: want %q, got %q", p2, rd2.payload)
+	}
+}
+
+func TestDirectToFirst(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGateway(t, downAddr, OutputFirstDatagram, nil)
+
+	// Send two datagrams on the same socket (same session)
+	p1 := []byte("PING1")
+	p2 := []byte("PING2")
+	sendMultipleOnSameSocket(t, gwAddr, [][]byte{p1, p2}, 2*time.Second)
+
+	rd1 := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd1.hasProxy {
+		t.Fatal("first datagram: downstream should have PROXY header (first_datagram output)")
+	}
+	if !bytes.Equal(rd1.payload, p1) {
+		t.Fatalf("payload1: want %q, got %q", p1, rd1.payload)
+	}
+
+	rd2 := waitForRecorded(t, recorded, 2*time.Second)
+	if rd2.hasProxy {
+		t.Fatal("second datagram: downstream should NOT have PROXY header (first_datagram output, already sent)")
+	}
+	if !bytes.Equal(rd2.payload, p2) {
+		t.Fatalf("payload2: want %q, got %q", p2, rd2.payload)
+	}
+}
+
+func TestEveryToFirst(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGateway(t, downAddr, OutputFirstDatagram, nil)
+
+	// Send two PROXY datagrams on same socket (same session)
+	p1 := []byte("PING1")
+	p2 := []byte("PING2")
+	sendMultipleOnSameSocket(t, gwAddr, [][]byte{makeProxyDatagram(p1), makeProxyDatagram(p2)}, 2*time.Second)
+
+	rd1 := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd1.hasProxy {
+		t.Fatal("first: should have PROXY header")
+	}
+	if !bytes.Equal(rd1.payload, p1) {
+		t.Fatalf("payload1: want %q, got %q", p1, rd1.payload)
+	}
+
+	rd2 := waitForRecorded(t, recorded, 2*time.Second)
+	if rd2.hasProxy {
+		t.Fatal("second: should NOT have PROXY header (first_datagram output, already sent)")
+	}
+	if !bytes.Equal(rd2.payload, p2) {
+		t.Fatalf("payload2: want %q, got %q", p2, rd2.payload)
+	}
+}
+
+func TestFirstToFirst(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGateway(t, downAddr, OutputFirstDatagram, nil)
+
+	// First: [PROXY][P1], second: raw [P2] — same socket, same session
+	p1 := []byte("PING1")
+	p2 := []byte("PING2")
+	sendMultipleOnSameSocket(t, gwAddr, [][]byte{makeProxyDatagram(p1), p2}, 2*time.Second)
+
+	rd1 := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd1.hasProxy {
+		t.Fatal("first: should have PROXY header")
+	}
+
+	rd2 := waitForRecorded(t, recorded, 2*time.Second)
+	if rd2.hasProxy {
+		t.Fatal("second: should NOT have PROXY header (first_datagram output)")
+	}
+	if !bytes.Equal(rd2.payload, p2) {
+		t.Fatalf("payload2: want %q, got %q", p2, rd2.payload)
+	}
+}
+
+// --- Security tests ---
+
+func TestMalformedProxyDropped(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGateway(t, downAddr, OutputEveryDatagram, nil)
+
+	// PROXY v2 signature + garbage (malformed)
+	malformed := append(proxyV2Sig, 0xFF, 0xFF, 0xFF, 0xFF)
+	pc, _ := net.Dial("udp", gwAddr)
+	_, _ = pc.Write(malformed)
+	pc.Close()
+
+	assertNoRecorded(t, recorded, 500*time.Millisecond)
+}
+
+func TestResourceOrderingNoSessionOnReject(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	// Trust 10.0.0.0/8 only — 127.0.0.1 is untrusted
+	trust, _ := gateway.NewTrustChecker([]string{"10.0.0.0/8"})
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyUse, trust, gateway.UntrustedReject)
+
+	// Send PROXY datagram from untrusted source (127.0.0.1)
+	pc, _ := net.Dial("udp", gwAddr)
+	_, _ = pc.Write(makeProxyDatagram([]byte("PING")))
+	pc.Close()
+
+	// Downstream should NOT receive (rejected before session creation)
+	assertNoRecorded(t, recorded, 500*time.Millisecond)
+}
+
+func TestSpoofedSrcIPRejected(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	trust, _ := gateway.NewTrustChecker([]string{"10.0.0.0/8"})
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyUse, trust, gateway.UntrustedReject)
+
+	// PROXY header claims SrcIP=10.0.0.1 (trusted), but actual peer is 127.0.0.1 (untrusted)
+	hdr := proxyproto.Header{
+		SrcIP:   net.IPv4(10, 0, 0, 1),
+		DstIP:   net.IPv4(198, 51, 100, 1),
+		SrcPort: 1234, DstPort: 8080,
+		Family:  proxyproto.FamilyUDP4,
+	}
+	encoded, _ := goproxyproto.NewDatagramWriter().FormatDatagram(hdr, []byte("PING"))
+	pc, _ := net.Dial("udp", gwAddr)
+	_, _ = pc.Write(encoded)
+	pc.Close()
+
+	assertNoRecorded(t, recorded, 500*time.Millisecond)
+}
+
+func TestMaxSessionsDrops(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	// maxSessions=2, use the full constructor
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyUse, nil, gateway.UntrustedReject)
+
+	// Send from 2 different sources (fills up)
+	for i := 0; i < 2; i++ {
+		pc, _ := net.Dial("udp", gwAddr)
+		_, _ = pc.Write([]byte("PING"))
+		_ = waitForRecorded(t, recorded, 2*time.Second) // drain downstream echo
+		pc.Close()
+	}
+
+	// Third source — should be dropped (max sessions)
+	pc, _ := net.Dial("udp", gwAddr)
+	_, _ = pc.Write([]byte("PING3"))
+	pc.Close()
+	assertNoRecorded(t, recorded, 500*time.Millisecond)
+}
+
+func TestIdleTimeoutExpires(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	// idleTimeout = 500ms
+	g, err := New(
+		"127.0.0.1:0", downAddr,
+		gateway.PolicyUse, nil, gateway.UntrustedReject,
+		OutputEveryDatagram, 500*time.Millisecond, 1024, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("gateway: %v", err)
+	}
+	t.Cleanup(func() { g.Close() })
+	go func() { _ = g.Serve() }()
+	time.Sleep(50 * time.Millisecond)
+	gwAddr := g.listener.LocalAddr().String()
+
+	// Send one datagram — creates a session
+	pc, _ := net.Dial("udp", gwAddr)
+	_, _ = pc.Write([]byte("PING"))
+	_ = waitForRecorded(t, recorded, 2*time.Second)
+
+	// Wait for idle timeout
+	time.Sleep(1 * time.Second)
+
+	// Session should be expired — count should be 0
+	if g.manager.Count() != 0 {
+		t.Fatalf("after idle timeout: session count should be 0, got %d", g.manager.Count())
+	}
+
+	// Send again — should create a new session
+	_, _ = pc.Write([]byte("PING2"))
+	_ = waitForRecorded(t, recorded, 2*time.Second)
+	pc.Close()
+}
+
+// --- Edge case tests ---
+
+func TestCloneHeaderDeepCopy(t *testing.T) {
+	original := proxyproto.Header{
+		SrcIP:   net.IPv4(192, 0, 2, 1),
+		DstIP:   net.IPv4(198, 51, 100, 1),
+		SrcPort: 1234,
+		DstPort: 8080,
+		Family:  proxyproto.FamilyUDP4,
+	}
+	cloned := cloneHeader(original)
+
+	// Modify original's IP slices (simulating packet buffer reuse)
+	original.SrcIP[0] = 0xFF
+	original.DstIP[0] = 0xFF
+
+	if cloned.SrcIP[0] == 0xFF {
+		t.Fatal("cloned SrcIP should be independent (deep-copy)")
+	}
+	if cloned.DstIP[0] == 0xFF {
+		t.Fatal("cloned DstIP should be independent (deep-copy)")
+	}
+	if cloned.TLVs != nil {
+		t.Fatal("cloned TLVs should be nil")
+	}
+}
+
+func TestKeyFromUDPAddrIPv6Zone(t *testing.T) {
+	addr1 := &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 1234, Zone: "eth0"}
+	addr2 := &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 1234, Zone: "wlan0"}
+
+	key1 := keyFromUDPAddr(addr1)
+	key2 := keyFromUDPAddr(addr2)
+
+	if key1 == key2 {
+		t.Fatal("different zones should produce different session keys")
+	}
+
+	addr3 := &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 1234, Zone: "eth0"}
+	key3 := keyFromUDPAddr(addr3)
+	if key1 != key3 {
+		t.Fatal("same zone should produce same session key")
+	}
+}
+
+func TestTrustStripAllowsDirect(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	trust, _ := gateway.NewTrustChecker([]string{"10.0.0.0/8"})
+	// UntrustedStrip: strip PROXY header, treat as direct
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyUse, trust, gateway.UntrustedStrip)
+
+	// Send PROXY datagram from untrusted source (127.0.0.1)
+	// Should be stripped → forwarded as direct with real source
+	payload := []byte("PING")
+	echo := sendAndReceiveEcho(t, gwAddr, makeProxyDatagram(payload), 2*time.Second)
+
+	rd := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd.hasProxy {
+		t.Fatal("downstream should still have PROXY header (every_datagram output, even for stripped)")
+	}
+	if !bytes.Equal(rd.payload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, rd.payload)
+	}
+	// Source should be real peer (127.0.0.1), not the fake 192.0.2.1 from PROXY header
+	if !rd.srcIP.Equal(net.IPv4(127, 0, 0, 1)) {
+		t.Fatalf("stripped srcIP: want 127.0.0.1, got %s", rd.srcIP)
+	}
+	if !bytes.Equal(echo, payload) {
+		t.Fatalf("echo: want %q, got %q", payload, echo)
+	}
+}
+
+func TestOutputModeString(t *testing.T) {
+	if OutputEveryDatagram.String() != "every_datagram" {
+		t.Fatal("every_datagram string")
+	}
+	if OutputFirstDatagram.String() != "first_datagram" {
+		t.Fatal("first_datagram string")
+	}
+}

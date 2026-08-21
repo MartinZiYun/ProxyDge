@@ -10,7 +10,7 @@ import (
 	"proxydge/internal/transport"
 )
 
-// decide applies trust rules then policy rules to determine the final header,
+// Decide applies trust rules then policy rules to determine the final header,
 // source, and allow/deny decision for a connection.
 //
 //   - reason="" — allowed, no special action
@@ -21,7 +21,7 @@ import (
 //
 // The caller should save the original src before calling, so it can log the
 // original source for the strip case.
-func decide(policy Policy, trust *TrustChecker, untrusted UntrustedAction,
+func Decide(policy Policy, trust *TrustChecker, untrusted UntrustedAction,
 	src proxyproto.Source, hdr proxyproto.Header, ip net.IP, c transport.AddrConn,
 ) (proxyproto.Header, proxyproto.Source, bool, string) {
 	reason := ""

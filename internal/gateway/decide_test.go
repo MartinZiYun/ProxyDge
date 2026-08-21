@@ -24,7 +24,7 @@ func testAddrConn() transport.AddrConn {
 
 func TestDecideAllowDirect(t *testing.T) {
 	trust, _ := NewTrustChecker(nil) // trust everyone
-	hdr, src, allow, reason := decide(PolicyUse, trust, UntrustedReject,
+	hdr, src, allow, reason := Decide(PolicyUse, trust, UntrustedReject,
 		proxyproto.SourceDirect, proxyproto.Header{}, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if !allow || reason != "" {
 		t.Fatalf("want allow/reason=\"\", got allow=%v reason=%q", allow, reason)
@@ -44,7 +44,7 @@ func TestDecideAllowDirect(t *testing.T) {
 func TestDecideAllowProxyTrusted(t *testing.T) {
 	trust, _ := NewTrustChecker(nil)
 	inHdr := proxyproto.Header{SrcIP: net.IPv4(10, 0, 0, 1), SrcPort: 1234, Family: proxyproto.FamilyTCP4}
-	hdr, src, allow, reason := decide(PolicyUse, trust, UntrustedReject,
+	hdr, src, allow, reason := Decide(PolicyUse, trust, UntrustedReject,
 		proxyproto.SourceV2, inHdr, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if !allow || reason != "" {
 		t.Fatalf("want allow/reason=\"\", got allow=%v reason=%q", allow, reason)
@@ -60,7 +60,7 @@ func TestDecideAllowProxyTrusted(t *testing.T) {
 
 func TestDecideUntrustedReject(t *testing.T) {
 	trust, _ := NewTrustChecker([]string{"10.0.0.0/8"}) // 127.x not trusted
-	hdr, src, allow, reason := decide(PolicyUse, trust, UntrustedReject,
+	hdr, src, allow, reason := Decide(PolicyUse, trust, UntrustedReject,
 		proxyproto.SourceV2, proxyproto.Header{}, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if allow || reason != "untrusted" {
 		t.Fatalf("want !allow/reason=\"untrusted\", got allow=%v reason=%q", allow, reason)
@@ -74,7 +74,7 @@ func TestDecideUntrustedReject(t *testing.T) {
 func TestDecideUntrustedStrip(t *testing.T) {
 	trust, _ := NewTrustChecker([]string{"10.0.0.0/8"}) // 127.x not trusted
 	inHdr := proxyproto.Header{SrcIP: net.IPv4(10, 0, 0, 1), SrcPort: 1234, Family: proxyproto.FamilyTCP4}
-	hdr, src, allow, reason := decide(PolicyUse, trust, UntrustedStrip,
+	hdr, src, allow, reason := Decide(PolicyUse, trust, UntrustedStrip,
 		proxyproto.SourceV2, inHdr, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if !allow || reason != "strip" {
 		t.Fatalf("want allow/reason=\"strip\", got allow=%v reason=%q", allow, reason)
@@ -93,7 +93,7 @@ func TestDecideUntrustedStrip(t *testing.T) {
 
 func TestDecidePolicyForbids(t *testing.T) {
 	trust, _ := NewTrustChecker(nil)
-	hdr, src, allow, reason := decide(PolicyReject, trust, UntrustedReject,
+	hdr, src, allow, reason := Decide(PolicyReject, trust, UntrustedReject,
 		proxyproto.SourceV2, proxyproto.Header{}, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if allow || reason != "policy:forbids" {
 		t.Fatalf("want !allow/reason=\"policy:forbids\", got allow=%v reason=%q", allow, reason)
@@ -106,7 +106,7 @@ func TestDecidePolicyForbids(t *testing.T) {
 
 func TestDecidePolicyRequires(t *testing.T) {
 	trust, _ := NewTrustChecker(nil)
-	hdr, src, allow, reason := decide(PolicyRequire, trust, UntrustedReject,
+	hdr, src, allow, reason := Decide(PolicyRequire, trust, UntrustedReject,
 		proxyproto.SourceDirect, proxyproto.Header{}, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if allow || reason != "policy:requires" {
 		t.Fatalf("want !allow/reason=\"policy:requires\", got allow=%v reason=%q", allow, reason)
@@ -119,7 +119,7 @@ func TestDecidePolicyRequires(t *testing.T) {
 
 func TestDecideDirectAllowedUnderReject(t *testing.T) {
 	trust, _ := NewTrustChecker(nil)
-	hdr, src, allow, reason := decide(PolicyReject, trust, UntrustedReject,
+	hdr, src, allow, reason := Decide(PolicyReject, trust, UntrustedReject,
 		proxyproto.SourceDirect, proxyproto.Header{}, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if !allow || reason != "" {
 		t.Fatalf("want allow/reason=\"\", got allow=%v reason=%q", allow, reason)
@@ -133,7 +133,7 @@ func TestDecideDirectAllowedUnderReject(t *testing.T) {
 func TestDecideProxyAllowedUnderRequire(t *testing.T) {
 	trust, _ := NewTrustChecker(nil)
 	inHdr := proxyproto.Header{SrcIP: net.IPv4(10, 0, 0, 1), SrcPort: 1234, Family: proxyproto.FamilyTCP4}
-	hdr, src, allow, reason := decide(PolicyRequire, trust, UntrustedReject,
+	hdr, src, allow, reason := Decide(PolicyRequire, trust, UntrustedReject,
 		proxyproto.SourceV2, inHdr, net.IPv4(127, 0, 0, 1), testAddrConn())
 	if !allow || reason != "" {
 		t.Fatalf("want allow/reason=\"\", got allow=%v reason=%q", allow, reason)

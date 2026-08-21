@@ -122,7 +122,7 @@ func (g *Gateway) handle(c tcp.Conn) {
 	// decide() so the caller can log the original source for the strip case
 	// (decide modifies src to SourceDirect when stripping).
 	origSrc := src
-	hdr, src, allow, reason := decide(g.policy, g.trust, g.untrusted, src, hdr, transport.RemoteIP(c), c)
+	hdr, src, allow, reason := Decide(g.policy, g.trust, g.untrusted, src, hdr, transport.RemoteIP(c), c)
 	if reason == "strip" {
 		g.log.Info("stripped: untrusted source PROXY header", "remote", c.RemoteAddr(), "source", origSrc)
 	}

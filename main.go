@@ -78,6 +78,9 @@ func cmdStart(args []string) int {
 	// it shows even if listen/serve later fails. Captured by journalctl.
 	fmt.Fprintln(os.Stderr, version.String())
 	fmt.Fprint(os.Stderr, cfg.Describe())
+	for _, w := range cfg.Warnings() {
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
 
 	ln, err := transport.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -92,11 +95,17 @@ func cmdStart(args []string) int {
 	}
 	defer closeFile()
 
+	trust, err := gateway.NewTrustChecker(cfg.TrustedNetworks)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "proxydge: %v\n", err)
+		return 1
+	}
+
 	g := gateway.New(
 		ln, transport.TCPDialer{},
 		goproxyproto.NewReader(), goproxyproto.NewWriter(),
 		gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, logger,
-		nil, gateway.UntrustedReject,
+		trust, untrustedProxyAction(cfg.UntrustedProxyAction),
 	)
 
 	errc := make(chan error, 1)
@@ -228,6 +237,16 @@ func gatewayPolicy(s string) gateway.Policy {
 	}
 }
 
+// untrustedProxyAction maps the validated config string to the gateway's
+// enum. It is in main (not the config package) so the gateway stays free
+// of config imports.
+func untrustedProxyAction(s string) gateway.UntrustedAction {
+	if s == "strip" {
+		return gateway.UntrustedStrip
+	}
+	return gateway.UntrustedReject
+}
+
 // multiHandler fans a record out to console and file handlers, each with its
 // own level threshold and format. Per-sink level filtering happens in each
 // sub-handler's Enabled (checked in Handle so a record is only written to the
@@ -285,6 +304,8 @@ start options:
   -upstream <host:port>     downstream target (required)
   -policy <p>              use|require|reject (default "use")
   -detect-timeout <dur>    PROXY header detection timeout (default 1s)
+  -trusted-networks <cidrs>      trusted networks (comma-separated CIDRs, empty=all)
+  -untrusted-proxy-action <a>    reject|strip (default "reject")
   -config <path>           config file path
   -log-console-level <l>   debug|info|warn|error (default "info")
   -log-console-format <f>  text|json (default "text")

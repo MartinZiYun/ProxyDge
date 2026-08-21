@@ -103,3 +103,22 @@ func TestUnknownCommand(t *testing.T) {
 		t.Fatalf("unknown command: want exit 2, got %d", code)
 	}
 }
+
+func TestStartInvalidUntrustedProxyAction(t *testing.T) {
+	if code := run([]string{"start", "-upstream", "127.0.0.1:1", "-untrusted-proxy-action", "bogus", "-listen", "bad-listen"}); code != 2 {
+		t.Fatalf("invalid -untrusted-proxy-action: want exit 2, got %d", code)
+	}
+}
+
+func TestStartValidUntrustedProxyAction(t *testing.T) {
+	// Valid flag reaches listen/serve; bad listen forces runtime exit 1.
+	if code := run([]string{"start", "-upstream", "127.0.0.1:1", "-untrusted-proxy-action", "strip", "-listen", "bad-listen"}); code != 1 {
+		t.Fatalf("valid -untrusted-proxy-action=strip: want exit 1 (runtime), got %d", code)
+	}
+}
+
+func TestStartValidTrustedNetworks(t *testing.T) {
+	if code := run([]string{"start", "-upstream", "127.0.0.1:1", "-trusted-networks", "10.0.0.0/8", "-listen", "bad-listen"}); code != 1 {
+		t.Fatalf("valid -trusted-networks: want exit 1 (runtime), got %d", code)
+	}
+}

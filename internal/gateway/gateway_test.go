@@ -63,7 +63,27 @@ func startGateway(t *testing.T, policy Policy, upstream string) string {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, transport.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g := New(ln, transport.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	go func() { _ = g.Serve() }()
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln.Addr().String()
+}
+
+// startGatewayTrusted runs a gateway with a non-nil TrustChecker so trust
+// decisions are exercised. The client connects from 127.0.0.1, so a trust
+// list of "10.0.0.0/8" makes the client untrusted, while "127.0.0.0/8" makes
+// it trusted.
+func startGatewayTrusted(t *testing.T, policy Policy, upstream string, trustCIDRs []string, untrusted UntrustedAction) string {
+	t.Helper()
+	ln, err := transport.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("gateway listen: %v", err)
+	}
+	tc, err := NewTrustChecker(trustCIDRs)
+	if err != nil {
+		t.Fatalf("NewTrustChecker: %v", err)
+	}
+	g := New(ln, transport.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -290,5 +310,159 @@ func TestGatewayUsePartialCandidateTimeout(t *testing.T) {
 	}
 	if !bytes.HasPrefix(echo, sigV2) || !bytes.HasSuffix(echo, []byte("PING")) {
 		t.Fatalf("echo: want <v2 header>...PING, got %x", echo)
+	}
+}
+
+func TestGatewayUntrustedReject(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	// 127.0.0.1 is NOT in 10.0.0.0/8 → untrusted
+	gw := startGatewayTrusted(t, PolicyUse, downAddr, []string{"10.0.0.0/8"}, UntrustedReject)
+
+	v2Header := mustHex(t, tcp4HeaderHex)
+	c, err := net.Dial("tcp", gw)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	_, _ = c.Write(v2Header)
+	_, _ = c.Write([]byte("PING"))
+	buf, _ := io.ReadAll(c)
+
+	// Downstream must never be contacted.
+	select {
+	case got := <-recorded:
+		t.Fatalf("downstream unexpectedly received %x", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if len(buf) != 0 {
+		t.Fatalf("expected EOF (gateway closed), got %q", buf)
+	}
+}
+
+func TestGatewayUntrustedStrip(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	// 127.0.0.1 is NOT in 10.0.0.0/8 → untrusted; strip re-normalizes as direct
+	gw := startGatewayTrusted(t, PolicyUse, downAddr, []string{"10.0.0.0/8"}, UntrustedStrip)
+
+	v2Header := mustHex(t, tcp4HeaderHex) // claims SrcIP=192.0.2.1 (fake)
+	echo, _ := dialAndExchange(t, gw, v2Header, []byte("PING"))
+
+	select {
+	case got := <-recorded:
+		if !bytes.HasPrefix(got, sigV2) {
+			t.Fatalf("downstream missing v2 header: got %x", got)
+		}
+		// Parse the emitted v2 header: SrcIP must be the real client IP
+		// (127.0.0.1), NOT the fake 192.0.2.1 from the stripped header.
+		h, src, err := goproxyproto.NewReader().Read(bufio.NewReader(bytes.NewReader(got)))
+		if err != nil || src != proxyproto.SourceV2 {
+			t.Fatalf("parse emitted header: src=%v err=%v", src, err)
+		}
+		if !h.SrcIP.Equal(net.IPv4(127, 0, 0, 1)) {
+			t.Fatalf("stripped SrcIP: want 127.0.0.1 (real), got %s", h.SrcIP)
+		}
+		if !bytes.HasSuffix(got, []byte("PING")) {
+			t.Fatalf("downstream missing payload: got %x", got)
+		}
+		if !bytes.Equal(echo, got) {
+			t.Fatalf("echo != recorded: echo %x recorded %x", echo, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("downstream did not receive within timeout")
+	}
+}
+
+func TestGatewayUntrustedDirectNotAffected(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	// 127.0.0.1 untrusted, but this is a direct connection (no PROXY header).
+	// Trust check only applies to PROXY headers; direct is unaffected.
+	gw := startGatewayTrusted(t, PolicyUse, downAddr, []string{"10.0.0.0/8"}, UntrustedReject)
+
+	echo, _ := dialAndExchange(t, gw, nil, []byte("PING"))
+
+	select {
+	case got := <-recorded:
+		if !bytes.HasPrefix(got, sigV2) || !bytes.HasSuffix(got, []byte("PING")) {
+			t.Fatalf("direct + untrusted should forward normally: got %x", got)
+		}
+		_ = echo
+	case <-time.After(2 * time.Second):
+		t.Fatal("downstream did not receive within timeout")
+	}
+}
+
+func TestGatewayUntrustedHeaderClaimsTrusted(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	// Trust list is 10.0.0.0/8. Client connects from 127.0.0.1 (untrusted)
+	// but sends a PROXY header claiming SrcIP=10.0.0.1 (inside trusted range).
+	// Must still be rejected — remoteIP comes from the socket, not the header.
+	gw := startGatewayTrusted(t, PolicyUse, downAddr, []string{"10.0.0.0/8"}, UntrustedReject)
+
+	// v2 header with SrcIP=10.0.0.1 (claims to be from trusted network)
+	fakeHeader := mustHex(t, "0d0a0d0a000d0a515549540a2111000c0a000001c633640104d21f90")
+	c, err := net.Dial("tcp", gw)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	_, _ = c.Write(fakeHeader)
+	_, _ = c.Write([]byte("PING"))
+	buf, _ := io.ReadAll(c)
+
+	select {
+	case got := <-recorded:
+		t.Fatalf("downstream unexpectedly received %x (should be rejected)", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if len(buf) != 0 {
+		t.Fatalf("expected EOF, got %q", buf)
+	}
+}
+
+func TestGatewayTrustedProxyV2(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	// 127.0.0.1 IS in 127.0.0.0/8 → trusted; PROXY header honored.
+	gw := startGatewayTrusted(t, PolicyUse, downAddr, []string{"127.0.0.0/8"}, UntrustedReject)
+
+	v2Header := mustHex(t, tcp4HeaderHex)
+	echo, _ := dialAndExchange(t, gw, v2Header, []byte("PING"))
+
+	select {
+	case got := <-recorded:
+		want := append(mustHex(t, tcp4HeaderHex), []byte("PING")...)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("trusted + v2: want %x, got %x", want, got)
+		}
+		_ = echo
+	case <-time.After(2 * time.Second):
+		t.Fatal("downstream did not receive within timeout")
+	}
+}
+
+func TestGatewayTrustedMalformedRejected(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	// 127.0.0.1 IS trusted, but sends a malformed PROXY header (invalid version
+	// byte). Trust only controls "who may send", not "is the header valid".
+	// reader.Read returns err → close, before trust check.
+	gw := startGatewayTrusted(t, PolicyUse, downAddr, []string{"127.0.0.0/8"}, UntrustedReject)
+
+	// 12-byte v2 signature + version=1 (invalid, must be 2) + cmd=1 + family=TCP4 + len=12
+	malformed := append(sigV2, 0x11, 0x11, 0x00, 0x0c)
+	c, err := net.Dial("tcp", gw)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	_, _ = c.Write(malformed)
+	_, _ = c.Write([]byte("PING"))
+	buf, _ := io.ReadAll(c)
+
+	select {
+	case got := <-recorded:
+		t.Fatalf("downstream unexpectedly received %x (malformed should be rejected)", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if len(buf) != 0 {
+		t.Fatalf("expected EOF, got %q", buf)
 	}
 }

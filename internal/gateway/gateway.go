@@ -55,6 +55,8 @@ type Gateway struct {
 	upstream      string
 	detectTimeout time.Duration
 	log           *slog.Logger
+	trust         *TrustChecker
+	untrusted     UntrustedAction
 }
 
 // New constructs a Gateway. The listener, dialer, reader, writer, and logger
@@ -64,7 +66,7 @@ type Gateway struct {
 // duration, the connection is treated as direct. Pass 0 to block indefinitely
 // (only safe when all upstreams are guaranteed to send a complete header or
 // close). logger may be nil (a discarding logger is used).
-func New(ln transport.Listener, dialer transport.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout time.Duration, logger *slog.Logger) *Gateway {
+func New(ln transport.Listener, dialer transport.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction) *Gateway {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -77,6 +79,8 @@ func New(ln transport.Listener, dialer transport.Dialer, r proxyproto.Reader, w 
 		upstream:      upstream,
 		detectTimeout: detectTimeout,
 		log:           logger,
+		trust:         trust,
+		untrusted:     untrusted,
 	}
 }
 
@@ -112,6 +116,23 @@ func (g *Gateway) handle(c transport.Conn) {
 		g.log.Error("malformed upstream header", "remote", c.RemoteAddr(), "err", err)
 		return
 	}
+
+	// Trust check: only trusted networks may send PROXY headers.
+	// remoteIP comes from the TCP socket, never from the PROXY header's SrcIP.
+	// Policy evaluates the normalized source AFTER trust handling, not the raw
+	// presence of a PROXY header.
+	if src != proxyproto.SourceDirect && !g.trust.IsTrusted(remoteIP(c)) {
+		switch g.untrusted {
+		case UntrustedReject:
+			g.log.Info("rejected: untrusted source with PROXY header", "remote", c.RemoteAddr(), "source", src)
+			return
+		case UntrustedStrip:
+			g.log.Info("stripped: untrusted source PROXY header", "remote", c.RemoteAddr(), "source", src)
+			src = proxyproto.SourceDirect
+			hdr = proxyproto.HeaderFromConn(c)
+		}
+	}
+
 	switch {
 	case g.policy == PolicyReject && src != proxyproto.SourceDirect:
 		g.log.Info("rejected: policy forbids PROXY header", "remote", c.RemoteAddr(), "policy", g.policy.String())
@@ -152,4 +173,14 @@ func (g *Gateway) handle(c transport.Conn) {
 		_ = c.CloseWrite() // upstream→client done → tell client via FIN
 	}()
 	wg.Wait()
+}
+
+// remoteIP extracts the IP from the connection's real TCP peer address.
+// It never uses the PROXY header's claimed SrcIP — trust decisions must be
+// based on the socket's RemoteAddr.
+func remoteIP(c transport.Conn) net.IP {
+	if tcp, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+		return tcp.IP
+	}
+	return nil
 }

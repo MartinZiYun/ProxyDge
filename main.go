@@ -96,6 +96,7 @@ func cmdStart(args []string) int {
 		ln, transport.TCPDialer{},
 		goproxyproto.NewReader(), goproxyproto.NewWriter(),
 		gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, logger,
+		nil, gateway.UntrustedReject,
 	)
 
 	errc := make(chan error, 1)

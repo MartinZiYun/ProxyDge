@@ -36,7 +36,7 @@ func TestProvenanceEnvBeatsFile(t *testing.T) {
 	if c.sourceOf(fUpstream) != "env" {
 		t.Fatalf("upstream source: want env, got %q", c.sourceOf(fUpstream))
 	}
-	if c.sourceOf(fLogConsoleLevel) != "file "+p {
+	if c.sourceOf(fLogConsoleLevel) != "file" {
 		t.Fatalf("console level source: want file, got %q", c.sourceOf(fLogConsoleLevel))
 	}
 	if c.loadedFile != p {
@@ -62,7 +62,7 @@ func TestProvenanceFileFieldsAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := "file " + p
+	want := "file"
 	for _, f := range []string{fListen, fUpstream, fPolicy, fDetectTimeout, fLogConsoleLevel, fLogConsoleFormat, fLogFilePath, fLogFileLevel, fLogFileFormat, fTrustedNetworks, fUntrustedProxyAction} {
 		if got := c.sourceOf(f); got != want {
 			t.Errorf("%s source: want %q, got %q", f, want, got)
@@ -84,7 +84,7 @@ func TestDescribeContainsSources(t *testing.T) {
 	if !strings.Contains(desc, "config file: "+p) {
 		t.Fatalf("describe missing config file line:\n%s", desc)
 	}
-	if !strings.Contains(desc, "upstream = 1.2.3.4:80 (file "+p+")") {
+	if !strings.Contains(desc, "upstream = 1.2.3.4:80 (file)") {
 		t.Fatalf("describe missing upstream provenance:\n%s", desc)
 	}
 	if !strings.Contains(desc, "policy = reject (env)") {

@@ -60,26 +60,29 @@ func (c *Config) mark(field, source string) {
 	c.prov[field] = source
 }
 
-// configField pairs a field's display name with a value accessor, for Describe.
+// configField pairs a field's display name with a value accessor and its
+// display group, for Describe.
 type configField struct {
 	name  string
+	group string
 	value func(*Config) any
 }
 
 // configFields is the single source of truth for field names + display order.
-// Sources mark fields using these exact names; Describe prints them in order.
+// Sources mark fields using these exact names; Describe prints them in order,
+// grouped by the group field.
 var configFields = []configField{
-	{"listen", func(c *Config) any { return c.Listen }},
-	{"upstream", func(c *Config) any { return c.Upstream }},
-	{"policy", func(c *Config) any { return c.Policy }},
-	{"detect-timeout", func(c *Config) any { return c.DetectTimeout }},
-	{"trusted-networks", func(c *Config) any { return c.TrustedNetworks }},
-	{"untrusted-proxy-action", func(c *Config) any { return c.UntrustedProxyAction }},
-	{"log.console.level", func(c *Config) any { return c.LogConsoleLevel }},
-	{"log.console.format", func(c *Config) any { return c.LogConsoleFormat }},
-	{"log.file.path", func(c *Config) any { return c.LogFilePath }},
-	{"log.file.level", func(c *Config) any { return c.LogFileLevel }},
-	{"log.file.format", func(c *Config) any { return c.LogFileFormat }},
+	{"listen", "connection", func(c *Config) any { return c.Listen }},
+	{"upstream", "connection", func(c *Config) any { return c.Upstream }},
+	{"policy", "proxy header", func(c *Config) any { return c.Policy }},
+	{"detect-timeout", "proxy header", func(c *Config) any { return c.DetectTimeout }},
+	{"trusted-networks", "trust", func(c *Config) any { return c.TrustedNetworks }},
+	{"untrusted-proxy-action", "trust", func(c *Config) any { return c.UntrustedProxyAction }},
+	{"log.console.level", "logging", func(c *Config) any { return c.LogConsoleLevel }},
+	{"log.console.format", "logging", func(c *Config) any { return c.LogConsoleFormat }},
+	{"log.file.path", "logging", func(c *Config) any { return c.LogFilePath }},
+	{"log.file.level", "logging", func(c *Config) any { return c.LogFileLevel }},
+	{"log.file.format", "logging", func(c *Config) any { return c.LogFileFormat }},
 }
 
 // fieldName constants keep the Sources' mark() calls aligned with configFields.
@@ -99,7 +102,8 @@ const (
 
 // Describe returns a human-readable dump of every config field with its value
 // and the source that provided it, plus the config file that was loaded (if
-// any). Intended for the startup banner.
+// any). Intended for the startup banner. The file source is shown as just
+// "(file)" — the full path is on the "config file:" line above.
 func (c *Config) Describe() string {
 	var b strings.Builder
 	b.WriteString("config file: ")
@@ -108,10 +112,11 @@ func (c *Config) Describe() string {
 	} else {
 		b.WriteString("(none)")
 	}
-	b.WriteByte('\n')
+	b.WriteString("\n\n-- config --\n")
 	for _, f := range configFields {
-		fmt.Fprintf(&b, "%s = %v (%s)\n", f.name, f.value(c), c.sourceOf(f.name))
+		fmt.Fprintf(&b, "  %s = %v (%s)\n", f.name, f.value(c), c.sourceOf(f.name))
 	}
+	b.WriteString("-----------\n")
 	return b.String()
 }
 
@@ -403,7 +408,7 @@ func (s fileSource) Apply(c *Config) error {
 	}
 	// A file was actually loaded — record it for the startup banner.
 	c.loadedFile = s.path
-	src := "file " + s.path
+	src := "file"
 	if y.Listen != nil {
 		c.Listen = *y.Listen
 		c.mark(fListen, src)

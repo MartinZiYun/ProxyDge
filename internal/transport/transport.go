@@ -38,10 +38,13 @@ type CloseWriter interface {
 }
 
 // RemoteIP extracts the remote IP from a connection's peer address. Handles
-// TCP now; UDP can be added later. A helper, not a core abstraction.
+// TCP and UDP; other address types return nil. A helper, not a core
+// abstraction.
 func RemoteIP(c AddrConn) net.IP {
 	switch a := c.RemoteAddr().(type) {
 	case *net.TCPAddr:
+		return a.IP
+	case *net.UDPAddr:
 		return a.IP
 	}
 	return nil

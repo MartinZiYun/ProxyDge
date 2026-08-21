@@ -1,0 +1,39 @@
+help.text: |
+  ProxyDge — PROXY Protocol normalizer.
+
+  Usage:
+    proxydge <command> [options]
+
+  Commands:
+    start     Run the gateway.
+    init      Write a sample config.yaml.
+    version   Print version and build info.
+    help      Show this help.
+
+  Configuration precedence (highest to lowest):
+    CLI flags  >  env (PROXYDGE_*)  >  config file  >  defaults
+
+  The config file is auto-discovered at <executable-dir>/config.yaml; override
+  with -config. All options below apply to 'start' unless noted.
+
+  start options:
+    -listen <addr>                  listen address (default ":9000")
+    -upstream <host:port>           downstream target (required)
+    -policy <p>                     use|require|reject (default "use")
+    -detect-timeout <dur>          PROXY header detection timeout (default 1s)
+    -trusted-networks <cidrs>       trusted networks (comma-separated CIDRs, empty=all)
+    -untrusted-proxy-action <a>     reject|strip (default "reject")
+    -config <path>                  config file path
+    -lang <locale>                  display language: en|zh-CN (default auto)
+    -log-console-level <l>          debug|info|warn|error (default "info")
+    -log-console-format <f>        text|json (default "text")
+    -log-file <path>               file log path (empty = disabled)
+    -log-file-level <l>            debug|info|warn|error (default "info")
+    -log-file-format <f>           text|json (default "json")
+
+  init options:
+    -config <path>                  where to write the sample (default: <exe-dir>/config.yaml)
+
+warning.trusted_networks.empty: "trusted-networks is empty: all sources are trusted. Any IP can spoof source addresses via PROXY headers. Configure trusted-networks in production."
+warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip: non-trusted sources with PROXY headers will have their headers stripped and forwarded with real socket addresses. They can still connect — use reject (default) to deny them."
+notice.config_migrated: "config file migrated to version %d, backup at %s.bak"

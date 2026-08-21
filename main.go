@@ -24,6 +24,7 @@ import (
 
 	"proxydge/internal/config"
 	"proxydge/internal/gateway"
+	"proxydge/internal/i18n"
 	"proxydge/internal/proxyproto/goproxyproto"
 	"proxydge/internal/transport"
 	"proxydge/internal/version"
@@ -40,7 +41,7 @@ func main() {
 // run is the command dispatcher. With no args it prints help and exits 0.
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(out, helpText)
+		fmt.Fprint(out, helpText())
 		return 0
 	}
 	switch args[0] {
@@ -51,13 +52,20 @@ func run(args []string) int {
 	case "version":
 		return cmdVersion(args[1:])
 	case "help":
-		fmt.Fprint(out, helpText)
+		fmt.Fprint(out, helpText())
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "proxydge: unknown command %q\n", args[0])
 		fmt.Fprintln(os.Stderr, "Run 'proxydge help' for usage.")
 		return 2
 	}
+}
+
+// helpText loads the locale catalog (from PROXYDGE_LANG or system locale)
+// and returns the translated help text.
+func helpText() string {
+	cat, _ := i18n.Load(i18n.DetectLocale(os.Getenv("PROXYDGE_LANG")))
+	return cat.T("help.text")
 }
 
 // cmdStart loads configuration (CLI > env > file > defaults) and runs the
@@ -78,11 +86,15 @@ func cmdStart(args []string) int {
 	// it shows even if listen/serve later fails. Captured by journalctl.
 	fmt.Fprintln(os.Stderr, version.String())
 	fmt.Fprint(os.Stderr, cfg.Describe())
+
+	// Load locale catalog for translating warnings and notices.
+	cat, _ := i18n.Load(i18n.DetectLocale(cfg.Lang))
+
 	for _, w := range cfg.Warnings() {
-		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", cat.T(w.Key, w.Args...))
 	}
-	if notice := cfg.MigrationNotice(); notice != "" {
-		fmt.Fprintf(os.Stderr, "NOTICE: %s\n", notice)
+	if key, args := cfg.MigrationNotice(); key != "" {
+		fmt.Fprintf(os.Stderr, "NOTICE: %s\n", cat.T(key, args...))
 	}
 
 	ln, err := transport.Listen("tcp", cfg.Listen)
@@ -284,38 +296,3 @@ func (h *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 func (h *multiHandler) WithGroup(name string) slog.Handler {
 	return &multiHandler{console: h.console.WithGroup(name), file: h.file.WithGroup(name)}
 }
-
-const helpText = `ProxyDge — PROXY Protocol normalizer.
-
-Usage:
-  proxydge <command> [options]
-
-Commands:
-  start     Run the gateway.
-  init      Write a sample config.yaml.
-  version   Print version and build info.
-  help      Show this help.
-
-Configuration precedence (highest to lowest):
-  CLI flags  >  env (PROXYDGE_*)  >  config file  >  defaults
-
-The config file is auto-discovered at <executable-dir>/config.yaml; override
-with -config. All options below apply to 'start' unless noted.
-
-start options:
-  -listen <addr>            listen address (default ":9000")
-  -upstream <host:port>     downstream target (required)
-  -policy <p>              use|require|reject (default "use")
-  -detect-timeout <dur>    PROXY header detection timeout (default 1s)
-  -trusted-networks <cidrs>      trusted networks (comma-separated CIDRs, empty=all)
-  -untrusted-proxy-action <a>    reject|strip (default "reject")
-  -config <path>           config file path
-  -log-console-level <l>   debug|info|warn|error (default "info")
-  -log-console-format <f>  text|json (default "text")
-  -log-file <path>         file log path (empty = disabled)
-  -log-file-level <l>      debug|info|warn|error (default "info")
-  -log-file-format <f>     text|json (default "json")
-
-init options:
-  -config <path>           where to write the sample (default: <exe-dir>/config.yaml)
-`

@@ -122,3 +122,15 @@ func TestStartValidTrustedNetworks(t *testing.T) {
 		t.Fatalf("valid -trusted-networks: want exit 1 (runtime), got %d", code)
 	}
 }
+
+func TestStartValidLang(t *testing.T) {
+	if code := run([]string{"start", "-upstream", "127.0.0.1:1", "-lang", "zh-CN", "-listen", "bad-listen"}); code != 1 {
+		t.Fatalf("valid -lang: want exit 1 (runtime), got %d", code)
+	}
+}
+
+func TestStartInvalidLang(t *testing.T) {
+	if code := run([]string{"start", "-upstream", "127.0.0.1:1", "-lang", "bogus", "-listen", "bad-listen"}); code != 2 {
+		t.Fatalf("invalid -lang: want exit 2, got %d", code)
+	}
+}

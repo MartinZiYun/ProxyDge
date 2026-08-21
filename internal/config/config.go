@@ -29,6 +29,7 @@ type Config struct {
 	Upstream      string
 	Policy        string
 	DetectTimeout time.Duration
+	Lang                string // display language: "" (auto) | "en" | "zh-CN"
 	TrustedNetworks      []string
 	UntrustedProxyAction  string
 	ConfigPath    string // resolved config file path (meta; not validated)
@@ -81,6 +82,7 @@ var configFields = []configField{
 	{"upstream", "connection", func(c *Config) any { return c.Upstream }},
 	{"policy", "proxy header", func(c *Config) any { return c.Policy }},
 	{"detect-timeout", "proxy header", func(c *Config) any { return c.DetectTimeout }},
+	{"lang", "proxy header", func(c *Config) any { return c.Lang }},
 	{"trusted-networks", "trust", func(c *Config) any { return c.TrustedNetworks }},
 	{"untrusted-proxy-action", "trust", func(c *Config) any { return c.UntrustedProxyAction }},
 	{"log.console.level", "logging", func(c *Config) any { return c.LogConsoleLevel }},
@@ -96,6 +98,7 @@ const (
 	fUpstream          = "upstream"
 	fPolicy            = "policy"
 	fDetectTimeout     = "detect-timeout"
+	fLang                  = "lang"
 	fTrustedNetworks      = "trusted-networks"
 	fUntrustedProxyAction = "untrusted-proxy-action"
 	fLogConsoleLevel   = "log.console.level"
@@ -133,32 +136,37 @@ func (c *Config) sourceOf(field string) string {
 	return "default"
 }
 
+// Warning is a security warning with a message key (for i18n) and optional
+// args. main translates the key via the i18n catalog; the config package
+// itself never formats user-visible text.
+type Warning struct {
+	Key  string
+	Args []any
+}
+
 // Warnings returns security warnings for the startup banner. An empty
 // trusted-networks and untrusted-proxy-action=strip both produce warnings
-// explaining the consequences.
-func (c *Config) Warnings() []string {
-	var ws []string
+// explaining the consequences. Returns message keys (not formatted text) so
+// main can translate them.
+func (c *Config) Warnings() []Warning {
+	var ws []Warning
 	if len(c.TrustedNetworks) == 0 {
-		ws = append(ws, "trusted-networks is empty: all sources are trusted. "+
-			"Any IP can spoof source addresses via PROXY headers. "+
-			"Configure trusted-networks in production.")
+		ws = append(ws, Warning{Key: "warning.trusted_networks.empty"})
 	}
 	if c.UntrustedProxyAction == "strip" {
-		ws = append(ws, "untrusted-proxy-action=strip: non-trusted sources with PROXY headers "+
-			"will have their headers stripped and forwarded with real socket addresses. "+
-			"They can still connect — use reject (default) to deny them.")
+		ws = append(ws, Warning{Key: "warning.untrusted_proxy_action.strip"})
 	}
 	return ws
 }
 
-// MigrationNotice returns a human-readable notice if the config file was
-// auto-migrated on load, or "" if no migration happened. main prints this
-// to stderr after the startup banner.
-func (c *Config) MigrationNotice() string {
+// MigrationNotice returns a message key + args if the config file was
+// auto-migrated on load, or ("", nil) if no migration happened. main
+// translates the key via the i18n catalog.
+func (c *Config) MigrationNotice() (key string, args []any) {
 	if !c.Migrated {
-		return ""
+		return "", nil
 	}
-	return fmt.Sprintf("config file migrated to version %d, backup at %s.bak", currentConfigVersion, c.loadedFile)
+	return "notice.config_migrated", []any{currentConfigVersion, c.loadedFile}
 }
 
 // Source overlays configuration fields it actually provides onto cfg. A Source
@@ -231,6 +239,11 @@ func (c *Config) Validate() error {
 	case "reject", "strip":
 	default:
 		return fmt.Errorf("config: invalid untrusted-proxy-action %q (reject|strip)", c.UntrustedProxyAction)
+	}
+	switch c.Lang {
+	case "", "en", "zh-CN":
+	default:
+		return fmt.Errorf("config: invalid lang %q (en|zh-CN, empty=auto)", c.Lang)
 	}
 	for _, cidr := range c.TrustedNetworks {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
@@ -335,6 +348,7 @@ listen: ":9000"          # listen address (host:port)
 upstream: ""             # REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001
 policy: "use"            # use | require | reject
 detect-timeout: "1s"     # PROXY header detection timeout
+lang: ""                  # display language: en|zh-CN (empty=auto)
 
 # Trust control: only these networks may send PROXY headers.
 # Empty (default) trusts everyone — configure in production to prevent spoofing.
@@ -391,6 +405,7 @@ type yamlFields struct {
 	Upstream      *string `yaml:"upstream"`
 	Policy        *string `yaml:"policy"`
 	DetectTimeout *string `yaml:"detect-timeout"`
+	Lang          *string `yaml:"lang"`
 	Log           *yamlLog `yaml:"log"`
 	TrustedNetworks      []string `yaml:"trusted-networks"`
 	UntrustedProxyAction *string  `yaml:"untrusted-proxy-action"`
@@ -473,6 +488,10 @@ func (s fileSource) Apply(c *Config) error {
 		c.DetectTimeout = d
 		c.mark(fDetectTimeout, src)
 	}
+	if y.Lang != nil {
+		c.Lang = *y.Lang
+		c.mark(fLang, src)
+	}
 	if y.TrustedNetworks != nil {
 		c.TrustedNetworks = y.TrustedNetworks
 		c.mark(fTrustedNetworks, src)
@@ -520,6 +539,7 @@ var knownConfigKeys = map[string]bool{
 	"upstream":               true,
 	"policy":                 true,
 	"detect-timeout":         true,
+	"lang":                   true,
 	"trusted-networks":       true,
 	"untrusted-proxy-action": true,
 	"log":                    true,
@@ -540,6 +560,7 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	writeStrField(&b, "upstream", y.Upstream, "", "REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001")
 	writeStrField(&b, "policy", y.Policy, "use", "use | require | reject")
 	writeStrField(&b, "detect-timeout", y.DetectTimeout, "1s", "PROXY header detection timeout")
+	writeStrField(&b, "lang", y.Lang, "", "display language: en|zh-CN (empty=auto)")
 
 	b.WriteString("\n# Trust control: only these networks may send PROXY headers.\n")
 	b.WriteString("# Empty (default) trusts everyone — configure in production to prevent spoofing.\n")
@@ -623,6 +644,10 @@ func (envSource) Apply(c *Config) error {
 		c.DetectTimeout = d
 		c.mark(fDetectTimeout, "env")
 	}
+	if v, ok := os.LookupEnv(envPrefix + "LANG"); ok && v != "" {
+		c.Lang = v
+		c.mark(fLang, "env")
+	}
 	if v, ok := os.LookupEnv(envPrefix + "LOG_CONSOLE_LEVEL"); ok && v != "" {
 		c.LogConsoleLevel = v
 		c.mark(fLogConsoleLevel, "env")
@@ -661,6 +686,7 @@ func (envSource) Apply(c *Config) error {
 type flagValues struct {
 	listen, upstream, policy, config        *string
 	detectTimeout                            *time.Duration
+	lang                                     *string
 	logConsoleLevel, logConsoleFormat       *string
 	logFilePath, logFileLevel, logFileFormat *string
 	trustedNetworks                          *string
@@ -676,6 +702,7 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.policy = fs.String("policy", "", "upstream header policy: use|require|reject")
 	fv.config = fs.String("config", "", "config file path (overrides exe-dir config.yaml)")
 	fv.detectTimeout = fs.Duration("detect-timeout", 0, "PROXY header detection timeout")
+	fv.lang = fs.String("lang", "", "display language: en|zh-CN (default auto)")
 	fv.logConsoleLevel = fs.String("log-console-level", "", "console log level: debug|info|warn|error")
 	fv.logConsoleFormat = fs.String("log-console-format", "", "console log format: text|json")
 	fv.logFilePath = fs.String("log-file", "", "file log path (empty=disabled)")
@@ -712,6 +739,10 @@ func (s flagSource) Apply(c *Config) error {
 	if s.set["detect-timeout"] {
 		c.DetectTimeout = *s.fv.detectTimeout
 		c.mark(fDetectTimeout, "flag")
+	}
+	if s.set["lang"] {
+		c.Lang = *s.fv.lang
+		c.mark(fLang, "flag")
 	}
 	if s.set["config"] {
 		c.ConfigPath = *s.fv.config

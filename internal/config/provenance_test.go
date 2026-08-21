@@ -57,13 +57,13 @@ func TestProvenanceFlagBeatsEnv(t *testing.T) {
 
 func TestProvenanceFileFieldsAll(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 1\nlisten: 1.1.1.1:1\nupstream: 2.2.2.2:2\npolicy: require\ndetect-timeout: 250ms\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /tmp/x.log\n    level: warn\n    format: json\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\n")
+	p := writeFile(t, dir, "c.yaml", "version: 2\nlisten: 1.1.1.1:1\nupstream: 2.2.2.2:2\npolicy: require\ndetect-timeout: 250ms\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /tmp/x.log\n    level: warn\n    format: json\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\nprotocol: udp\nidle-timeout: 60s\nmax-sessions: 512\nmax-datagram-size: 1500\nudp-output: first_datagram\n")
 	c, err := Load([]string{"-config", p})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	want := "file"
-	for _, f := range []string{fListen, fUpstream, fPolicy, fDetectTimeout, fLogConsoleLevel, fLogConsoleFormat, fLogFilePath, fLogFileLevel, fLogFileFormat, fTrustedNetworks, fUntrustedProxyAction} {
+	for _, f := range []string{fListen, fUpstream, fPolicy, fDetectTimeout, fLogConsoleLevel, fLogConsoleFormat, fLogFilePath, fLogFileLevel, fLogFileFormat, fTrustedNetworks, fUntrustedProxyAction, fProtocol, fIdleTimeout, fMaxSessions, fMaxDatagramSize, fUDPOutput} {
 		if got := c.sourceOf(f); got != want {
 			t.Errorf("%s source: want %q, got %q", f, want, got)
 		}

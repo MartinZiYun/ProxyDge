@@ -202,6 +202,11 @@ func TestValidateGood(t *testing.T) {
 		LogConsoleLevel:  "info",
 		LogConsoleFormat: "text",
 		UntrustedProxyAction: "reject",
+		Protocol:             "tcp",
+		IdleTimeout:          30 * time.Second,
+		MaxSessions:          1024,
+		MaxDatagramSize:      65535,
+		UDPOutput:            "every_datagram",
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid config: %v", err)

@@ -126,7 +126,8 @@ func TestValidateBadConsoleFormat(t *testing.T) {
 func TestValidateFileLevelOnlyWhenPathSet(t *testing.T) {
 	// file path empty => file level/format not validated even if bogus
 	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second,
-		LogConsoleLevel: "info", LogConsoleFormat: "text", LogFileLevel: "bogus", UntrustedProxyAction: "reject"}
+		LogConsoleLevel: "info", LogConsoleFormat: "text", LogFileLevel: "bogus", UntrustedProxyAction: "reject",
+		Protocol: "tcp", IdleTimeout: 30 * time.Second, MaxSessions: 1024, MaxDatagramSize: 65535, UDPOutput: "every_datagram"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("file off + bogus file level should not fail: %v", err)
 	}

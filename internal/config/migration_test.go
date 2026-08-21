@@ -34,7 +34,7 @@ func TestMigrationFutureVersionErrors(t *testing.T) {
 // no migration — file is untouched, Migrated is false.
 func TestMigrationCurrentVersionNoOp(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\n")
+	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\n")
 	orig, _ := os.ReadFile(p)
 	var c Config
 	if err := (fileSource{path: p}).Apply(&c); err != nil {
@@ -73,8 +73,8 @@ func TestMigrationOldVersion(t *testing.T) {
 	}
 	// File now has current version.
 	migrated, _ := os.ReadFile(p)
-	if !strings.Contains(string(migrated), "version: 1") {
-		t.Fatalf("migrated file missing version: 1:\n%s", migrated)
+	if !strings.Contains(string(migrated), "version: 2") {
+		t.Fatalf("migrated file missing version: 2:\n%s", migrated)
 	}
 }
 

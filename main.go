@@ -27,6 +27,7 @@ import (
 	"proxydge/internal/i18n"
 	"proxydge/internal/proxyproto/goproxyproto"
 	"proxydge/internal/tcp"
+	"proxydge/internal/udp"
 	"proxydge/internal/version"
 )
 
@@ -107,12 +108,6 @@ func cmdStart(args []string) int {
 		fmt.Fprintf(os.Stderr, "NOTICE: %s\n", cat.T(key, args...))
 	}
 
-	ln, err := tcp.Listen("tcp", cfg.Listen)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "proxydge: listen: %v\n", err)
-		return 1
-	}
-
 	logger, closeFile, err := buildLogger(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: logger: %v\n", err)
@@ -126,22 +121,50 @@ func cmdStart(args []string) int {
 		return 1
 	}
 
-	g := gateway.New(
-		ln, tcp.TCPDialer{},
-		goproxyproto.NewReader(), goproxyproto.NewWriter(),
-		gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, logger,
-		trust, untrustedProxyAction(cfg.UntrustedProxyAction),
-	)
+	// Branch on protocol: UDP gateway has its own session/datagram model;
+	// TCP gateway uses the stream-based pipeStream.
+	var errc chan error
+	var closer func()
 
-	errc := make(chan error, 1)
-	go func() { errc <- g.Serve() }()
+	if cfg.Protocol == "udp" {
+		g, err := udp.New(
+			cfg.Listen, cfg.Upstream,
+			gatewayPolicy(cfg.Policy), trust, untrustedProxyAction(cfg.UntrustedProxyAction),
+			udpOutputMode(cfg.UDPOutput),
+			cfg.IdleTimeout, int64(cfg.MaxSessions), cfg.MaxDatagramSize,
+			logger,
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "proxydge: udp gateway: %v\n", err)
+			return 1
+		}
+		defer g.Close()
+		errc = make(chan error, 1)
+		go func() { errc <- g.Serve() }()
+		closer = g.Close
+	} else {
+		ln, err := tcp.Listen("tcp", cfg.Listen)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "proxydge: listen: %v\n", err)
+			return 1
+		}
+		g := gateway.New(
+			ln, tcp.TCPDialer{},
+			goproxyproto.NewReader(), goproxyproto.NewWriter(),
+			gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, logger,
+			trust, untrustedProxyAction(cfg.UntrustedProxyAction),
+		)
+		errc = make(chan error, 1)
+		go func() { errc <- g.Serve() }()
+		closer = func() { _ = ln.Close() }
+	}
 
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
 	select {
 	case sig := <-sigc:
 		logger.Info("proxydge: shutting down", "signal", sig.String())
-		_ = ln.Close()
+		closer()
 		if err := <-errc; err != nil {
 			fmt.Fprintf(os.Stderr, "proxydge: serve: %v\n", err)
 			return 1
@@ -278,6 +301,16 @@ func untrustedProxyAction(s string) gateway.UntrustedAction {
 		return gateway.UntrustedStrip
 	}
 	return gateway.UntrustedReject
+}
+
+// udpOutputMode maps the validated config string to the UDP gateway's enum.
+// It is in main (not the config package) so the udp package stays free of
+// config imports.
+func udpOutputMode(s string) udp.OutputMode {
+	if s == "first_datagram" {
+		return udp.OutputFirstDatagram
+	}
+	return udp.OutputEveryDatagram
 }
 
 // multiHandler fans a record out to console and file handlers, each with its

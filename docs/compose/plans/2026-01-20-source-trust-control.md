@@ -1,5 +1,10 @@
 # Source Trust Control Implementation Plan
 
+> [!NOTE]
+> This document may not reflect the current implementation.
+> See the final report for up-to-date state:
+> [Final Report](../reports/source-trust-control.md)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use compose:subagent (recommended) or compose:execute to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Before starting, create an isolated worktree via the compose:worktree skill (suggested slug: `source-trust-control`).
 
 **Goal:** Add a trust control layer to ProxyDge that restricts which IP networks may send PROXY Protocol headers, with configurable behavior for non-trusted sources.

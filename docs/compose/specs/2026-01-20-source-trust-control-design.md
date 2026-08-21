@@ -6,6 +6,11 @@ branch: feat/source-trust-control
 
 # Source Trust Control for PROXY Protocol Headers
 
+> [!NOTE]
+> This document may not reflect the current implementation.
+> See the final report for up-to-date state:
+> [Final Report](../reports/source-trust-control.md)
+
 ## [S1] Problem
 
 ProxyDge 当前的 `Policy`（use/require/reject）只控制**是否接受** PROXY header，但不控制**谁有权发送**。任何 IP 连上来都可以发一个伪造的 PROXY v1/v2 header，声称自己来自 `127.0.0.1` 或内网任意地址。这会导致下游错误信任攻击者声明的源地址，从而产生源地址伪造风险。

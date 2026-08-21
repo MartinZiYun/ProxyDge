@@ -1,15 +1,25 @@
 ---
 feature: tcp-specific-abstraction
-status: designed
+status: delivered
 updated: 2026-08-21
 branch: refactor/tcp-protocol-abstraction
-commits: TBD
+commits: f4d9120..2031cca
 ---
 
 # TCP-Specific Transport Abstraction
 
 ## Report
 
+**What was built** — The old `internal/transport` package (which was TCP-specific but claimed to be transport-agnostic) was split into three layers. `internal/protocol` defines a lightweight `Protocol` string enum (`tcp`, `udp`) for config/routing only. `internal/transport` now holds only cross-transport interfaces (`AddrConn` for address access, `Conn` for minimal I/O on connection-oriented transports). `internal/tcp` holds the TCP-specific implementation: `Conn` embeds `transport.Conn` and adds `CloseWrite`/`SetReadDeadline`, plus `Listener`, `Dialer`, `TCPDialer`, and `Listen`. `proxyproto` removed its local `AddrConn` and now imports `transport.AddrConn`, eliminating the duplicate interface. Gateway and main.go switched all type references from `transport.*` to `tcp.*`, formally acknowledging TCP semantics. The `remoteIP` local variable was renamed `tcp`→`ta` to avoid package-name shadowing.
+
+**Verification** — `go build ./...` PASS. `go test ./...` PASS (all packages, 0 failures). `go vet ./...` PASS. `gofmt` clean on all new/modified files. Reviewer subagent confirmed all 8 spec acceptance criteria met, zero critical issues, no behavioral changes.
+
+**Journey log**:
+- Initially placed `tcp` (T2) before `transport` (T3) in the task list — user caught the reversed dependency (tcp.Conn embeds transport.Conn, so transport must come first). Fixed task ordering.
+- User flagged `transport.Conn` comment as semantically wrong: "all transports satisfy" prematurely assumes UDP's datagram model fits `Read([]byte)`/`Write([]byte)`. Refined to "connection-oriented transports" with explicit note that UDP may define its own abstraction.
+- User scoped protocol enum to TCP/UDP only — no QUIC/UNIX until the product actually plans them. Removed QUIC from scope.
+- gofmt spacing regression on `tcpListener` one-liners caught by reviewer — fixed with `gofmt -w`.
+- Pre-existing imprecise comment on `tcpListener` (claims `*net.TCPAddr` doesn't satisfy `net.Addr`; real reason is `Accept()` returns `net.Conn` not `tcp.Conn`) — left verbatim per "no behavioral changes" scope; tracked for separate doc-cleanup pass.
 ## [S1] Problem
 
 The `internal/transport` package claims to be a transport-agnostic abstraction but is actually TCP-specific: `Conn` includes `CloseWrite()` (TCP FIN / half-close) and `SetReadDeadline()` (TCP stream detection). `proxyproto` defines a duplicate `AddrConn` interface solely to avoid an import cycle with `transport`. The gateway hardcodes TCP semantics without acknowledging it. This mislabeling blocks a future multi-protocol architecture (TCP/UDP gateways) because there is no clean boundary between cross-transport concepts and TCP-specific behavior.
@@ -151,10 +161,10 @@ main          (imports tcp, gateway, config, goproxyproto, ...)
 ## Tasks
 
 - [x] T1: Create `internal/protocol/protocol.go` with Protocol type and TCP/UDP constants — acceptance: `go build ./internal/protocol` succeeds; type is standalone with no imports beyond builtin (covers: S2)
-- [ ] T2: Rewrite `internal/transport/transport.go` with cross-transport AddrConn + Conn interfaces only — acceptance: package exports AddrConn and Conn; no TCP-specific methods; no concrete implementations (covers: S2)
-- [ ] T3: Create `internal/tcp/tcp.go` with TCP-specific Conn/Listener/Dialer/TCPDialer/Listen (content moved from old transport.go, Conn embeds transport.Conn) — acceptance: file compiles; `tcp.Conn` embeds `transport.Conn` and adds CloseWrite/SetReadDeadline (covers: S2; depends: T2)
-- [ ] T4: Update `internal/proxyproto/proxyproto.go` to import transport and use `transport.AddrConn` instead of local `AddrConn` — acceptance: `proxyproto.AddrConn` removed; `HeaderFromConn` takes `transport.AddrConn`; package compiles (covers: S2; depends: T2)
-- [ ] T5: Update `internal/gateway/gateway.go` and `trust.go` to use `tcp.*` instead of `transport.*` for Listener/Dialer/Conn types — acceptance: Gateway struct and New() signature use tcp.Listener/tcp.Dialer; handle() takes tcp.Conn; remoteIP takes tcp.Conn (covers: S2; depends: T3, T4)
-- [ ] T6: Update `main.go` to use `tcp.Listen`/`tcp.TCPDialer` instead of `transport.*` — acceptance: main.go imports tcp not transport; `go build` succeeds (covers: S2; depends: T3, T5)
-- [ ] T7: Move `internal/transport/transport_test.go` to `internal/tcp/tcp_test.go` and update references; update `internal/gateway/gateway_test.go` to use `tcp.*` — acceptance: test files compile and use tcp.Listen/tcp.TCPDialer (covers: S2; depends: T3, T5)
-- [ ] T8: Run `go build ./...` and `go test ./...` — acceptance: zero compile errors; all existing tests pass with no behavioral changes (covers: S2; depends: T7)
+- [x] T2: Rewrite `internal/transport/transport.go` with cross-transport AddrConn + Conn interfaces only — acceptance: package exports AddrConn and Conn; no TCP-specific methods; no concrete implementations (covers: S2)
+- [x] T3: Create `internal/tcp/tcp.go` with TCP-specific Conn/Listener/Dialer/TCPDialer/Listen (content moved from old transport.go, Conn embeds transport.Conn) — acceptance: file compiles; `tcp.Conn` embeds `transport.Conn` and adds CloseWrite/SetReadDeadline (covers: S2; depends: T2)
+- [x] T4: Update `internal/proxyproto/proxyproto.go` to import transport and use `transport.AddrConn` instead of local `AddrConn` — acceptance: `proxyproto.AddrConn` removed; `HeaderFromConn` takes `transport.AddrConn`; package compiles (covers: S2; depends: T2)
+- [x] T5: Update `internal/gateway/gateway.go` and `trust.go` to use `tcp.*` instead of `transport.*` for Listener/Dialer/Conn types — acceptance: Gateway struct and New() signature use tcp.Listener/tcp.Dialer; handle() takes tcp.Conn; remoteIP takes tcp.Conn (covers: S2; depends: T3, T4)
+- [x] T6: Update `main.go` to use `tcp.Listen`/`tcp.TCPDialer` instead of `transport.*` — acceptance: main.go imports tcp not transport; `go build` succeeds (covers: S2; depends: T3, T5)
+- [x] T7: Move `internal/transport/transport_test.go` to `internal/tcp/tcp_test.go` and update references; update `internal/gateway/gateway_test.go` to use `tcp.*` — acceptance: test files compile and use tcp.Listen/tcp.TCPDialer (covers: S2; depends: T3, T5)
+- [x] T8: Run `go build ./...` and `go test ./...` — acceptance: zero compile errors; all existing tests pass with no behavioral changes (covers: S2; depends: T7)

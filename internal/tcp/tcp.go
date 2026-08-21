@@ -47,8 +47,8 @@ func (l tcpListener) Accept() (Conn, error) {
 	return c, nil
 }
 
-func (l tcpListener) Close() error    { return l.ln.Close() }
-func (l tcpListener) Addr() net.Addr  { return l.ln.Addr() }
+func (l tcpListener) Close() error   { return l.ln.Close() }
+func (l tcpListener) Addr() net.Addr { return l.ln.Addr() }
 
 // Listen creates a TCP Listener.
 func Listen(network, address string) (Listener, error) {

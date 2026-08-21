@@ -98,6 +98,30 @@ func TestInitWritesSample(t *testing.T) {
 	}
 }
 
+func TestInitRefusesExisting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.yaml")
+	// First init succeeds.
+	if code := run([]string{"init", "-config", path}); code != 0 {
+		t.Fatalf("first init: want exit 0, got %d", code)
+	}
+	// Second init without -force should refuse (exit 2).
+	if code := run([]string{"init", "-config", path}); code != 2 {
+		t.Fatalf("second init without -force: want exit 2, got %d", code)
+	}
+}
+
+func TestInitForceOverwrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.yaml")
+	// First init.
+	if code := run([]string{"init", "-config", path}); code != 0 {
+		t.Fatalf("first init: want exit 0, got %d", code)
+	}
+	// Second init with -force should succeed.
+	if code := run([]string{"init", "-config", path, "-force"}); code != 0 {
+		t.Fatalf("init -force: want exit 0, got %d", code)
+	}
+}
+
 func TestUnknownCommand(t *testing.T) {
 	if code := run([]string{"bogus"}); code != 2 {
 		t.Fatalf("unknown command: want exit 2, got %d", code)

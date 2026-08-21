@@ -241,9 +241,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: invalid untrusted-proxy-action %q (reject|strip)", c.UntrustedProxyAction)
 	}
 	switch c.Lang {
-	case "", "en", "zh-CN":
+	case "", "en", "zh-CN", "zh-TW":
 	default:
-		return fmt.Errorf("config: invalid lang %q (en|zh-CN, empty=auto)", c.Lang)
+		return fmt.Errorf("config: invalid lang %q (en|zh-CN|zh-TW, empty=auto)", c.Lang)
 	}
 	for _, cidr := range c.TrustedNetworks {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
@@ -348,7 +348,7 @@ listen: ":9000"          # listen address (host:port)
 upstream: ""             # REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001
 policy: "use"            # use | require | reject
 detect-timeout: "1s"     # PROXY header detection timeout
-lang: ""                  # display language: en|zh-CN (empty=auto)
+lang: ""                  # display language: en|zh-CN|zh-TW (empty=auto)
 
 # Trust control: only these networks may send PROXY headers.
 # Empty (default) trusts everyone — configure in production to prevent spoofing.
@@ -702,7 +702,7 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.policy = fs.String("policy", "", "upstream header policy: use|require|reject")
 	fv.config = fs.String("config", "", "config file path (overrides exe-dir config.yaml)")
 	fv.detectTimeout = fs.Duration("detect-timeout", 0, "PROXY header detection timeout")
-	fv.lang = fs.String("lang", "", "display language: en|zh-CN (default auto)")
+	fv.lang = fs.String("lang", "", "display language: en|zh-CN|zh-TW (default auto)")
 	fv.logConsoleLevel = fs.String("log-console-level", "", "console log level: debug|info|warn|error")
 	fv.logConsoleFormat = fs.String("log-console-format", "", "console log format: text|json")
 	fv.logFilePath = fs.String("log-file", "", "file log path (empty=disabled)")

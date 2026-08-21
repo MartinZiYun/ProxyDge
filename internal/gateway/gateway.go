@@ -164,12 +164,16 @@ func (g *Gateway) handle(c transport.Conn) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(up, br)
+		if _, err := io.Copy(up, br); err != nil {
+			g.log.Debug("pipe error: client→upstream", "remote", c.RemoteAddr(), "err", err)
+		}
 		_ = up.CloseWrite() // client→upstream done → tell downstream via FIN
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(c, up)
+		if _, err := io.Copy(c, up); err != nil {
+			g.log.Debug("pipe error: upstream→client", "remote", c.RemoteAddr(), "err", err)
+		}
 		_ = c.CloseWrite() // upstream→client done → tell client via FIN
 	}()
 	wg.Wait()

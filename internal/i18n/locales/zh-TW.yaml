@@ -1,0 +1,40 @@
+help.text: |
+  ProxyDge — PROXY Protocol 正規化閘道器。
+
+  用法：
+    proxydge <命令> [選項]
+
+  命令：
+    start     執行閘道器。
+    init      產生範例 config.yaml。
+    version   列印版本與建置資訊。
+    help      顯示此說明。
+
+  設定優先順序（從高到低）：
+    CLI 參數  >  環境變數 (PROXYDGE_*)  >  設定檔  >  預設值
+
+  設定檔自動從 <可執行檔目錄>/config.yaml 探索；可用 -config 覆寫。
+  以下選項均用於 'start' 命令（除非另行說明）。
+
+  start 選項：
+    -listen <addr>                  監聽位址 (預設 ":9000")
+    -upstream <host:port>           下游目標 (必填)
+    -policy <p>                     use|require|reject (預設 "use")
+    -detect-timeout <dur>          PROXY 標頭探測逾時 (預設 1s)
+    -trusted-networks <cidrs>       可信網段 (逗號分隔 CIDR, 空=全部信任)
+    -untrusted-proxy-action <a>     reject|strip (預設 "reject")
+    -config <path>                  設定檔路徑
+    -lang <locale>                  顯示語言: en|zh-CN|zh-TW (預設自動)
+    -log-console-level <l>          debug|info|warn|error (預設 "info")
+    -log-console-format <f>        text|json (預設 "text")
+    -log-file <path>               日誌檔案路徑 (空=停用)
+    -log-file-level <l>            debug|info|warn|error (預設 "info")
+    -log-file-format <f>           text|json (預設 "json")
+
+  init 選項：
+    -config <path>                  範例設定寫入位置 (預設: <exe-dir>/config.yaml)
+    -force                          覆寫已有設定檔
+
+warning.trusted_networks.empty: "trusted-networks 為空：所有來源均被信任。任何 IP 都可透過 PROXY header 偽造來源位址。請在生產環境設定 trusted-networks。"
+warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip：非可信來源的 PROXY header 將被剝離，改用真實套接字位址轉發。它們仍可連線——使用 reject（預設）可拒絕。"
+notice.config_migrated: "設定檔已遷移至版本 %d，備份位於 %s.bak"

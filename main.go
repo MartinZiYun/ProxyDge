@@ -156,11 +156,13 @@ func cmdStart(args []string) int {
 }
 
 // cmdInit writes a sample config.yaml. -config chooses the path (default: next
-// to the executable). Exit 0 on success, 1 on write error, 2 on bad flags.
+// to the executable). Refuses to overwrite an existing file unless -force is
+// given. Exit 0 on success, 1 on write error, 2 on bad flags or file exists.
 func cmdInit(args []string) int {
 	fs := flag.NewFlagSet("proxydge init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	cfgPath := fs.String("config", "", "where to write the sample config (default: <exe-dir>/config.yaml)")
+	force := fs.Bool("force", false, "overwrite an existing config file")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -170,6 +172,12 @@ func cmdInit(args []string) int {
 	path := *cfgPath
 	if path == "" {
 		path = config.DefaultConfigPath()
+	}
+	if !*force {
+		if _, err := os.Stat(path); err == nil {
+			fmt.Fprintf(os.Stderr, "proxydge: init: %s already exists — use -force to overwrite, or run 'proxydge start' to auto-migrate an existing config\n", path)
+			return 2
+		}
 	}
 	if err := config.WriteSample(path); err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: init: %v\n", err)

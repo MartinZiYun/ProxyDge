@@ -24,7 +24,7 @@ help.text: |
     -trusted-networks <cidrs>       trusted networks (comma-separated CIDRs, empty=all)
     -untrusted-proxy-action <a>     reject|strip (default "reject")
     -config <path>                  config file path
-    -lang <locale>                  display language: en|zh-CN (default auto)
+    -lang <locale>                  display language: en|zh-CN|zh-TW (default auto)
     -log-console-level <l>          debug|info|warn|error (default "info")
     -log-console-format <f>        text|json (default "text")
     -log-file <path>               file log path (empty = disabled)
@@ -33,6 +33,7 @@ help.text: |
 
   init options:
     -config <path>                  where to write the sample (default: <exe-dir>/config.yaml)
+    -force                          overwrite an existing config file
 
 warning.trusted_networks.empty: "trusted-networks is empty: all sources are trusted. Any IP can spoof source addresses via PROXY headers. Configure trusted-networks in production."
 warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip: non-trusted sources with PROXY headers will have their headers stripped and forwarded with real socket addresses. They can still connect — use reject (default) to deny them."

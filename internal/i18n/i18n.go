@@ -13,12 +13,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Locale is a normalized language tag ("en" or "zh-CN").
+// Locale is a normalized language tag ("en", "zh-CN", or "zh-TW").
 type Locale string
 
 const (
 	LocaleEN   Locale = "en"
 	LocaleZhCN Locale = "zh-CN"
+	LocaleZhTW Locale = "zh-TW"
 )
 
 //go:embed locales/en.yaml
@@ -27,9 +28,13 @@ var localeEN []byte
 //go:embed locales/zh-CN.yaml
 var localeZhCN []byte
 
+//go:embed locales/zh-TW.yaml
+var localeZhTW []byte
+
 var localeData = map[Locale][]byte{
 	LocaleEN:   localeEN,
 	LocaleZhCN: localeZhCN,
+	LocaleZhTW: localeZhTW,
 }
 
 // DetectLocale resolves the active locale. If explicit is non-empty (from
@@ -49,7 +54,8 @@ func DetectLocale(explicit string) Locale {
 
 // normalizeLocale maps common locale strings to our supported set.
 //   - en, en-US, en_US, en-GB → "en"
-//   - zh, zh-CN, zh_CN → "zh-CN"
+//   - zh, zh-CN, zh_CN → "zh-CN" (Simplified Chinese)
+//   - zh-TW, zh_TW, zh-HK → "zh-TW" (Traditional Chinese)
 //   - everything else → "en" (fallback)
 func normalizeLocale(s string) Locale {
 	s = strings.TrimSpace(s)
@@ -61,7 +67,10 @@ func normalizeLocale(s string) Locale {
 	if lower == "en" || strings.HasPrefix(lower, "en-") {
 		return LocaleEN
 	}
-	if lower == "zh" || lower == "zh-cn" {
+	if lower == "zh-tw" || lower == "zh-hk" {
+		return LocaleZhTW
+	}
+	if lower == "zh" || lower == "zh-cn" || strings.HasPrefix(lower, "zh-") {
 		return LocaleZhCN
 	}
 	return LocaleEN

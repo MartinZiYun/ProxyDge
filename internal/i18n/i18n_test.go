@@ -19,6 +19,10 @@ func TestNormalizeLocale(t *testing.T) {
 		{"zh-CN", LocaleZhCN},
 		{"zh_CN", LocaleZhCN},
 		{"zh-CN.UTF-8", LocaleZhCN},
+		{"zh-TW", LocaleZhTW},
+		{"zh_TW", LocaleZhTW},
+		{"zh-HK", LocaleZhTW},
+		{"zh-TW.UTF-8", LocaleZhTW},
 		{"fr", LocaleEN},
 		{"ja", LocaleEN},
 		{"", LocaleEN},
@@ -131,17 +135,29 @@ func TestTMissingKey(t *testing.T) {
 
 func TestKeyConsistency(t *testing.T) {
 	en, _ := Load(LocaleEN)
-	zh, _ := Load(LocaleZhCN)
+	zhCN, _ := Load(LocaleZhCN)
+	zhTW, _ := Load(LocaleZhTW)
 	enKeys := en.Keys()
-	zhKeys := zh.Keys()
+	zhCNKeys := zhCN.Keys()
+	zhTWKeys := zhTW.Keys()
 	sort.Strings(enKeys)
-	sort.Strings(zhKeys)
-	if len(enKeys) != len(zhKeys) {
-		t.Fatalf("key count mismatch: en=%d, zh-CN=%d\nen: %v\nzh: %v", len(enKeys), len(zhKeys), enKeys, zhKeys)
-	}
-	for i, k := range enKeys {
-		if k != zhKeys[i] {
-			t.Fatalf("key mismatch at %d: en=%q, zh-CN=%q", i, k, zhKeys[i])
+	sort.Strings(zhCNKeys)
+	sort.Strings(zhTWKeys)
+	for _, tc := range []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		{"zh-CN", zhCNKeys, enKeys},
+		{"zh-TW", zhTWKeys, enKeys},
+	} {
+		if len(tc.got) != len(tc.want) {
+			t.Fatalf("key count mismatch: en=%d, %s=%d\nen: %v\n%s: %v", len(tc.want), tc.name, len(tc.got), tc.want, tc.name, tc.got)
+		}
+		for i, k := range tc.want {
+			if k != tc.got[i] {
+				t.Fatalf("key mismatch at %d: en=%q, %s=%q", i, k, tc.name, tc.got[i])
+			}
 		}
 	}
 }

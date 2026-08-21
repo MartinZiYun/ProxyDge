@@ -1,15 +1,15 @@
 // Package goproxyproto datagram adapter — implements proxyproto.DatagramReader
-// and proxyproto.DatagramWriter using the go-proxyproto library. Unlike the
-// stream reader/writer (which use bufio.Reader/io.Writer), these operate on
-// complete []byte datagrams, preserving message boundaries.
+// and proxyproto.DatagramWriter. Unlike the stream reader/writer (which use
+// bufio.Reader/io.Writer), these operate on complete []byte datagrams,
+// preserving message boundaries. No bufio.Reader, no bytes.Reader — the v2
+// header is parsed directly from the raw datagram bytes.
 package goproxyproto
 
 import (
-	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 
 	gop "github.com/pires/go-proxyproto"
@@ -18,75 +18,117 @@ import (
 
 type datagramReader struct{}
 
-// ParseDatagram inspects a UDP datagram for a PROXY Protocol header.
+// sigV2 is the 12-byte PROXY Protocol v2 magic signature.
+var sigV2 = []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
+
+// ParseDatagram inspects a UDP datagram for a PROXY Protocol v2 header.
+// Parses the header directly from raw bytes — no bufio.Reader, no stream
+// abstraction.
 //
 //   - No PROXY signature → (zero Header, data, Direct, nil) — direct datagram.
-//   - v1/v2 signature + valid header → (Header, payload, V1/V2, nil).
-//   - v1/v2 signature but malformed → (zero, nil, 0, err) — caller MUST drop.
-//
-// Internally uses bufio.Reader to call the library's Read function, but the
-// public interface is datagram-oriented ([]byte in, []byte out). The library
-// requires *bufio.Reader for its Peek-based parsing; this is an adapter
-// implementation detail, not a leaky abstraction.
+//   - v2 signature + valid header → (Header, payload, V2, nil).
+//   - v2 signature but malformed → (zero, nil, 0, err) — caller MUST drop.
+//   - v1 signature → error (v1 not supported for UDP datagrams).
 func (datagramReader) ParseDatagram(data []byte) (pp.Header, []byte, pp.Source, error) {
-	if !hasProxySignature(data) {
-		// No signature → direct datagram, untouched.
+	if len(data) == 0 {
 		return pp.Header{}, data, pp.SourceDirect, nil
 	}
 
-	// Signature present — parse via library.
-	br := bufio.NewReader(bytes.NewReader(data))
-	h, err := gop.Read(br)
-	if err != nil {
-		return pp.Header{}, nil, 0, fmt.Errorf("goproxyproto: malformed PROXY header: %w", err)
+	// Check for v2 binary signature.
+	if data[0] == 0x0d {
+		if len(data) < len(sigV2) || !bytes.Equal(data[:len(sigV2)], sigV2) {
+			// Starts with \r but not a valid v2 signature — treat as direct.
+			return pp.Header{}, data, pp.SourceDirect, nil
+		}
+		return parseV2(data)
 	}
 
-	// Read remaining bytes after the header as payload.
-	payload, err := io.ReadAll(br)
-	if err != nil {
-		return pp.Header{}, nil, 0, fmt.Errorf("goproxyproto: reading payload after PROXY header: %w", err)
+	// Check for v1 text signature ("PROXY ").
+	if data[0] == 'P' && len(data) >= 6 && string(data[:6]) == "PROXY " {
+		return pp.Header{}, nil, 0, errors.New("goproxyproto: PROXY v1 not supported for UDP datagrams")
 	}
 
-	// Extract addresses — try TCP then UDP.
-	out, err := headerFromGop(h)
-	if err != nil {
-		return pp.Header{}, nil, 0, err
-	}
-
-	src := pp.SourceV1
-	if h.Version == 2 {
-		src = pp.SourceV2
-	}
-	return out, payload, src, nil
+	// No signature → direct datagram.
+	return pp.Header{}, data, pp.SourceDirect, nil
 }
 
-// hasProxySignature checks whether data starts with a PROXY Protocol v1 or v2
-// signature. v1 starts with "PROXY " (0x50...); v2 starts with \r\n\r\n\0\r\nQUIT\n.
-func hasProxySignature(data []byte) bool {
-	if len(data) == 0 {
-		return false
+// parseV2 parses a PROXY Protocol v2 header from a complete datagram.
+// Layout: [12 sig][1 ver+cmd][1 fam+proto][2 length][address payload...]
+func parseV2(data []byte) (pp.Header, []byte, pp.Source, error) {
+	const sigLen = 12
+	if len(data) < sigLen+4 {
+		return pp.Header{}, nil, 0, errors.New("goproxyproto: datagram too short for PROXY v2 header")
 	}
-	// v2 binary signature (first byte is 0x0d = '\r')
-	if data[0] == 0x0d && len(data) >= len(gop.SIGV2) {
-		return bytes.Equal(data[:len(gop.SIGV2)], gop.SIGV2)
+
+	verCmd := data[sigLen]
+	famProto := data[sigLen+1]
+	addrLen := int(binary.BigEndian.Uint16(data[sigLen+2 : sigLen+4]))
+	headerSize := sigLen + 4 + addrLen
+
+	if headerSize > len(data) {
+		return pp.Header{}, nil, 0, errors.New("goproxyproto: PROXY header length exceeds datagram")
 	}
-	// v1 text signature (starts with "PROXY ")
-	if data[0] == 'P' && len(data) >= 6 {
-		return string(data[:6]) == "PROXY "
+
+	// Validate version (high nibble = 2) and command (low nibble = 1 = PROXY).
+	if verCmd>>4 != 2 {
+		return pp.Header{}, nil, 0, fmt.Errorf("goproxyproto: unsupported PROXY version %d", verCmd>>4)
 	}
-	return false
+	if verCmd&0x0F != 1 {
+		return pp.Header{}, nil, 0, fmt.Errorf("goproxyproto: unsupported PROXY command %d (only PROXY supported)", verCmd&0x0F)
+	}
+
+	// Parse address family + transport protocol.
+	addrStart := sigLen + 4
+	addrData := data[addrStart : headerSize]
+
+	var hdr pp.Header
+	switch famProto {
+	case 0x11: // AF_INET + SOCK_STREAM (TCP4)
+		hdr = parseV4Addrs(addrData, pp.FamilyTCP4)
+	case 0x21: // AF_INET6 + SOCK_STREAM (TCP6)
+		hdr = parseV6Addrs(addrData, pp.FamilyTCP6)
+	case 0x12: // AF_INET + SOCK_DGRAM (UDP4)
+		hdr = parseV4Addrs(addrData, pp.FamilyUDP4)
+	case 0x22: // AF_INET6 + SOCK_DGRAM (UDP6)
+		hdr = parseV6Addrs(addrData, pp.FamilyUDP6)
+	default:
+		return pp.Header{}, nil, 0, fmt.Errorf("goproxyproto: unsupported address family/protocol 0x%02x", famProto)
+	}
+
+	if hdr.Family == pp.FamilyUnspec {
+		return pp.Header{}, nil, 0, errors.New("goproxyproto: invalid address length for PROXY family")
+	}
+
+	payload := data[headerSize:]
+	return hdr, payload, pp.SourceV2, nil
 }
 
-// headerFromGop converts a library *Header to our proxyproto.Header, trying
-// TCP addresses first, then UDP.
-func headerFromGop(h *gop.Header) (pp.Header, error) {
-	if s, d, ok := h.TCPAddrs(); ok {
-		return pp.HeaderFromAddrs(s, d), nil
+// parseV4Addrs parses IPv4 addresses: 4+4+2+2 = 12 bytes.
+func parseV4Addrs(data []byte, fam pp.Family) pp.Header {
+	if len(data) < 12 {
+		return pp.Header{Family: pp.FamilyUnspec}
 	}
-	if s, d, ok := h.UDPAddrs(); ok {
-		return pp.HeaderFromAddrs(s, d), nil
+	return pp.Header{
+		SrcIP:   append([]byte(nil), data[0:4]...),
+		DstIP:   append([]byte(nil), data[4:8]...),
+		SrcPort: binary.BigEndian.Uint16(data[8:10]),
+		DstPort: binary.BigEndian.Uint16(data[10:12]),
+		Family:  fam,
 	}
-	return pp.Header{}, errors.New("goproxyproto: non-TCP/UDP PROXY header not supported")
+}
+
+// parseV6Addrs parses IPv6 addresses: 16+16+2+2 = 36 bytes.
+func parseV6Addrs(data []byte, fam pp.Family) pp.Header {
+	if len(data) < 36 {
+		return pp.Header{Family: pp.FamilyUnspec}
+	}
+	return pp.Header{
+		SrcIP:   append([]byte(nil), data[0:16]...),
+		DstIP:   append([]byte(nil), data[16:32]...),
+		SrcPort: binary.BigEndian.Uint16(data[32:34]),
+		DstPort: binary.BigEndian.Uint16(data[34:36]),
+		Family:  fam,
+	}
 }
 
 // NewDatagramReader returns a pp.DatagramReader backed by go-proxyproto.

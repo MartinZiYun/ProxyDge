@@ -17,10 +17,12 @@ var ErrMaxSessions = errors.New("udp: max sessions reached")
 // UDPSessionManager tracks all active sessions, enforces max session count,
 // and handles session creation/removal. Session removal happens inside
 // expire()'s sync.Once block — no window for state inheritance.
+// The WaitGroup tracks all reader goroutines so Close() can wait for them.
 type UDPSessionManager struct {
 	sessions    sync.Map // sessionKey → *UDPSession
 	count       atomic.Int64
 	maxSessions int64
+	wg          sync.WaitGroup // tracks reader goroutines
 }
 
 // NewUDPSessionManager creates a manager with the given max session limit.
@@ -60,10 +62,19 @@ func (m *UDPSessionManager) Create(
 	s := newSession(key, clientAddr, listener, upstream, idleTimeout, log, m.remove)
 	actual, loaded := m.sessions.LoadOrStore(key, s)
 	if loaded {
-		// Another goroutine won the race; rollback our count and return existing
+		// Another goroutine won the race; rollback our count and clean up
+		// the losing session WITHOUT calling onExpire (which would delete
+		// the winning session from the map — same key).
 		m.count.Add(-1)
+		s.once.Do(func() {
+			close(s.done)
+			s.idleTimer.Stop()
+			_ = s.upstream.Close()
+		})
 		return actual.(*UDPSession), nil
 	}
+	// We won — start the reader goroutine.
+	s.startReader(&m.wg)
 	return s, nil
 }
 
@@ -75,11 +86,13 @@ func (m *UDPSessionManager) remove(key sessionKey) {
 }
 
 // ExpireAll expires all active sessions (for graceful shutdown).
+// Waits for all reader goroutines to exit before returning.
 func (m *UDPSessionManager) ExpireAll() {
 	m.sessions.Range(func(_, v any) bool {
 		v.(*UDPSession).expire()
 		return true
 	})
+	m.wg.Wait()
 }
 
 // Count returns the current number of active sessions.

@@ -61,6 +61,7 @@ type UDPSession struct {
 	once        sync.Once
 	log         *slog.Logger
 	onExpire    func(sessionKey) // called once when session expires
+	wg          *sync.WaitGroup  // tracks reader goroutine for graceful shutdown
 
 	// first_datagram OUTPUT state (only when outputMode == FirstDatagram)
 	headerSent atomic.Bool
@@ -93,8 +94,16 @@ func newSession(
 		onExpire:    onExpire,
 	}
 	s.idleTimer = time.AfterFunc(idleTimeout, s.expire)
-	go s.readLoop()
 	return s
+}
+
+// startReader launches the upstream→client reader goroutine. Called by the
+// manager ONLY after LoadOrStore succeeds — the losing session in a race
+// must not start a reader (its upstream socket is closed by the manager).
+func (s *UDPSession) startReader(wg *sync.WaitGroup) {
+	s.wg = wg
+	wg.Add(1)
+	go s.readLoop()
 }
 
 // refresh resets the idle timer. Called on each datagram (either direction).
@@ -121,6 +130,7 @@ func (s *UDPSession) expire() {
 // from the upstream socket and forwards them to the client via the listener.
 // Exits when the upstream socket is closed (by expire or read error).
 func (s *UDPSession) readLoop() {
+	defer s.wg.Done()
 	buf := make([]byte, 65535)
 	for {
 		n, err := s.upstream.Read(buf)

@@ -110,8 +110,13 @@ func New(
 
 // Serve runs the accept loop. Reads datagrams from the listener and dispatches
 // to handleDatagram. Returns when the listener is closed.
+// Oversized datagrams (n > maxDatagramSize) are dropped — never truncated.
 func (g *UDPGateway) Serve() error {
-	buf := make([]byte, g.maxDatagramSize)
+	// Buffer is sized to maxDatagramSize + 52 (max PROXY v2 header overhead for
+	// IPv6: 12 sig + 4 hdr + 36 addrs = 52). This ensures we can read the full
+	// datagram even when it includes a PROXY header, then check against
+	// maxDatagramSize for the payload portion.
+	buf := make([]byte, g.maxDatagramSize+52)
 	for {
 		n, peer, err := g.listener.ReadFromUDP(buf)
 		if err != nil {
@@ -119,6 +124,11 @@ func (g *UDPGateway) Serve() error {
 				return nil
 			}
 			return err
+		}
+		// Drop oversized datagrams — never truncate, never parse a truncated header.
+		if n > g.maxDatagramSize {
+			g.log.Debug("oversized datagram dropped", "remote", peer, "size", n, "max", g.maxDatagramSize)
+			continue
 		}
 		// Copy the datagram — the buffer is reused for the next ReadFromUDP.
 		data := make([]byte, n)

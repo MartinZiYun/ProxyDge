@@ -41,7 +41,7 @@ func main() {
 // run is the command dispatcher. With no args it prints help and exits 0.
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(out, helpText())
+		fmt.Fprint(out, helpText(nil))
 		return 0
 	}
 	switch args[0] {
@@ -52,7 +52,7 @@ func run(args []string) int {
 	case "version":
 		return cmdVersion(args[1:])
 	case "help":
-		fmt.Fprint(out, helpText())
+		fmt.Fprint(out, helpText(args[1:]))
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "proxydge: unknown command %q\n", args[0])
@@ -61,10 +61,20 @@ func run(args []string) int {
 	}
 }
 
-// helpText loads the locale catalog (from PROXYDGE_LANG or system locale)
-// and returns the translated help text.
-func helpText() string {
-	cat, _ := i18n.Load(i18n.DetectLocale(os.Getenv("PROXYDGE_LANG")))
+// helpText loads the locale catalog and returns the translated help text.
+// args are the flags after the command (e.g. ["-lang", "zh-CN"] for
+// "proxydge help -lang zh-CN"). If -lang is present it overrides
+// PROXYDGE_LANG and the system locale; otherwise DetectLocale falls back
+// through PROXYDGE_LANG > LANG/LC_ALL > en.
+func helpText(args []string) string {
+	lang := ""
+	if len(args) > 0 {
+		fs := flag.NewFlagSet("proxydge help", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		fs.StringVar(&lang, "lang", "", "display language: en|zh-CN")
+		_ = fs.Parse(args)
+	}
+	cat, _ := i18n.Load(i18n.DetectLocale(lang))
 	return cat.T("help.text")
 }
 

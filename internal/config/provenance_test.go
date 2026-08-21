@@ -57,13 +57,13 @@ func TestProvenanceFlagBeatsEnv(t *testing.T) {
 
 func TestProvenanceFileFieldsAll(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "listen: 1.1.1.1:1\nupstream: 2.2.2.2:2\npolicy: require\ndetect-timeout: 250ms\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /tmp/x.log\n    level: warn\n    format: json\n")
+	p := writeFile(t, dir, "c.yaml", "listen: 1.1.1.1:1\nupstream: 2.2.2.2:2\npolicy: require\ndetect-timeout: 250ms\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /tmp/x.log\n    level: warn\n    format: json\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\n")
 	c, err := Load([]string{"-config", p})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	want := "file " + p
-	for _, f := range []string{fListen, fUpstream, fPolicy, fDetectTimeout, fLogConsoleLevel, fLogConsoleFormat, fLogFilePath, fLogFileLevel, fLogFileFormat} {
+	for _, f := range []string{fListen, fUpstream, fPolicy, fDetectTimeout, fLogConsoleLevel, fLogConsoleFormat, fLogFilePath, fLogFileLevel, fLogFileFormat, fTrustedNetworks, fUntrustedProxyAction} {
 		if got := c.sourceOf(f); got != want {
 			t.Errorf("%s source: want %q, got %q", f, want, got)
 		}
@@ -75,7 +75,8 @@ func TestDescribeContainsSources(t *testing.T) {
 	p := filepath.Join(dir, "c.yaml")
 	writeFile(t, dir, "c.yaml", "upstream: 1.2.3.4:80\n")
 	t.Setenv("PROXYDGE_POLICY", "reject")
-	c, err := Load([]string{"-config", p, "-log-file", "/tmp/x.log"})
+	t.Setenv("PROXYDGE_UNTRUSTED_PROXY_ACTION", "reject")
+	c, err := Load([]string{"-config", p, "-log-file", "/tmp/x.log", "-trusted-networks", "192.168.0.0/16"})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -92,6 +93,12 @@ func TestDescribeContainsSources(t *testing.T) {
 	if !strings.Contains(desc, "log.file.path = /tmp/x.log (flag)") {
 		t.Fatalf("describe missing log.file.path flag provenance:\n%s", desc)
 	}
+	if !strings.Contains(desc, "trusted-networks = [192.168.0.0/16] (flag)") {
+		t.Fatalf("describe missing trusted-networks provenance:\n%s", desc)
+	}
+	if !strings.Contains(desc, "untrusted-proxy-action = reject (env)") {
+		t.Fatalf("describe missing untrusted-proxy-action provenance:\n%s", desc)
+	}
 	if !strings.Contains(desc, "listen = :9000 (default)") {
 		t.Fatalf("describe missing listen default provenance:\n%s", desc)
 	}
@@ -105,5 +112,21 @@ func TestDescribeNoFile(t *testing.T) {
 	desc := c.Describe()
 	if !strings.Contains(desc, "config file: (none)") {
 		t.Fatalf("describe should show (none) when no file loaded:\n%s", desc)
+	}
+}
+
+func TestProvenanceTrustFields(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.yaml", "upstream: 1.2.3.4:80\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\n")
+	t.Setenv("PROXYDGE_UNTRUSTED_PROXY_ACTION", "reject") // env beats file
+	c, err := Load([]string{"-config", p, "-trusted-networks", "192.168.0.0/16"})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.sourceOf(fTrustedNetworks) != "flag" {
+		t.Fatalf("trusted-networks source: want flag, got %q", c.sourceOf(fTrustedNetworks))
+	}
+	if c.sourceOf(fUntrustedProxyAction) != "env" {
+		t.Fatalf("untrusted-proxy-action source: want env, got %q", c.sourceOf(fUntrustedProxyAction))
 	}
 }

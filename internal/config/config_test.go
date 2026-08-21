@@ -201,6 +201,7 @@ func TestValidateGood(t *testing.T) {
 		DetectTimeout:    time.Second,
 		LogConsoleLevel:  "info",
 		LogConsoleFormat: "text",
+		UntrustedProxyAction: "reject",
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid config: %v", err)
@@ -214,5 +215,101 @@ func TestLoadValidationFails(t *testing.T) {
 	_, err := Load([]string{"-listen", ":0"})
 	if err == nil {
 		t.Fatal("Load should fail validation without upstream")
+	}
+}
+
+// --- trust control config ---
+
+func TestValidateBadUntrustedProxyAction(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "bogus"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("bad untrusted-proxy-action should fail validation")
+	}
+}
+
+func TestValidateBadTrustedNetworkCIDR(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "reject", TrustedNetworks: []string{"not-a-cidr"}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("invalid CIDR should fail validation")
+	}
+}
+
+func TestValidateTrustDefaults(t *testing.T) {
+	var c Config
+	if err := (defaultsSource{}).Apply(&c); err != nil {
+		t.Fatalf("defaults: %v", err)
+	}
+	c.Upstream = "1.2.3.4:80" // required
+	if err := c.Validate(); err != nil {
+		t.Fatalf("defaults should validate: %v", err)
+	}
+	if c.UntrustedProxyAction != "reject" {
+		t.Fatalf("untrusted-proxy-action default: want reject, got %q", c.UntrustedProxyAction)
+	}
+}
+
+func TestParseCIDRListTrimSpace(t *testing.T) {
+	got := parseCIDRList("10.0.0.0/8, 192.168.1.0/24")
+	want := []string{"10.0.0.0/8", "192.168.1.0/24"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("parseCIDRList: want %v, got %v", want, got)
+	}
+}
+
+func TestParseCIDRListEmptyValues(t *testing.T) {
+	got := parseCIDRList("")
+	if len(got) != 0 {
+		t.Fatalf("empty string should produce empty list, got %v", got)
+	}
+	got = parseCIDRList("10.0.0.0/8,")
+	if len(got) != 1 || got[0] != "10.0.0.0/8" {
+		t.Fatalf("trailing comma: want [10.0.0.0/8], got %v", got)
+	}
+}
+
+func TestEnvTrustedNetworks(t *testing.T) {
+	t.Setenv("PROXYDGE_TRUSTED_NETWORKS", "10.0.0.0/8, 192.168.0.0/16")
+	t.Setenv("PROXYDGE_UNTRUSTED_PROXY_ACTION", "strip")
+	var c Config
+	if err := (envSource{}).Apply(&c); err != nil {
+		t.Fatalf("env: %v", err)
+	}
+	if len(c.TrustedNetworks) != 2 || c.TrustedNetworks[0] != "10.0.0.0/8" || c.TrustedNetworks[1] != "192.168.0.0/16" {
+		t.Fatalf("trusted-networks: got %v", c.TrustedNetworks)
+	}
+	if c.UntrustedProxyAction != "strip" {
+		t.Fatalf("untrusted-proxy-action: want strip, got %q", c.UntrustedProxyAction)
+	}
+}
+
+func TestWarningsEmptyTrustedNetworks(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "reject"}
+	ws := c.Warnings()
+	if len(ws) != 1 {
+		t.Fatalf("empty trusted-networks: want 1 warning, got %d", len(ws))
+	}
+}
+
+func TestWarningsStripAction(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "strip", TrustedNetworks: []string{"10.0.0.0/8"}}
+	ws := c.Warnings()
+	if len(ws) != 1 {
+		t.Fatalf("strip action: want 1 warning, got %d", len(ws))
+	}
+}
+
+func TestWarningsBoth(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "strip"}
+	ws := c.Warnings()
+	if len(ws) != 2 {
+		t.Fatalf("both: want 2 warnings, got %d", len(ws))
+	}
+}
+
+func TestWarningsNone(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "reject", TrustedNetworks: []string{"10.0.0.0/8"}}
+	ws := c.Warnings()
+	if len(ws) != 0 {
+		t.Fatalf("secure config: want 0 warnings, got %d: %v", len(ws), ws)
 	}
 }

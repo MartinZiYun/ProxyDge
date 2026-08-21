@@ -12,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,8 @@ type Config struct {
 	Upstream      string
 	Policy        string
 	DetectTimeout time.Duration
+	TrustedNetworks      []string
+	UntrustedProxyAction  string
 	ConfigPath    string // resolved config file path (meta; not validated)
 
 	// Logging. console and file are independent sinks, each with its own level
@@ -70,6 +73,8 @@ var configFields = []configField{
 	{"upstream", func(c *Config) any { return c.Upstream }},
 	{"policy", func(c *Config) any { return c.Policy }},
 	{"detect-timeout", func(c *Config) any { return c.DetectTimeout }},
+	{"trusted-networks", func(c *Config) any { return c.TrustedNetworks }},
+	{"untrusted-proxy-action", func(c *Config) any { return c.UntrustedProxyAction }},
 	{"log.console.level", func(c *Config) any { return c.LogConsoleLevel }},
 	{"log.console.format", func(c *Config) any { return c.LogConsoleFormat }},
 	{"log.file.path", func(c *Config) any { return c.LogFilePath }},
@@ -83,6 +88,8 @@ const (
 	fUpstream          = "upstream"
 	fPolicy            = "policy"
 	fDetectTimeout     = "detect-timeout"
+	fTrustedNetworks      = "trusted-networks"
+	fUntrustedProxyAction = "untrusted-proxy-action"
 	fLogConsoleLevel   = "log.console.level"
 	fLogConsoleFormat  = "log.console.format"
 	fLogFilePath       = "log.file.path"
@@ -114,6 +121,24 @@ func (c *Config) sourceOf(field string) string {
 		return s
 	}
 	return "default"
+}
+
+// Warnings returns security warnings for the startup banner. An empty
+// trusted-networks and untrusted-proxy-action=strip both produce warnings
+// explaining the consequences.
+func (c *Config) Warnings() []string {
+	var ws []string
+	if len(c.TrustedNetworks) == 0 {
+		ws = append(ws, "trusted-networks is empty: all sources are trusted. "+
+			"Any IP can spoof source addresses via PROXY headers. "+
+			"Configure trusted-networks in production.")
+	}
+	if c.UntrustedProxyAction == "strip" {
+		ws = append(ws, "untrusted-proxy-action=strip: non-trusted sources with PROXY headers "+
+			"will have their headers stripped and forwarded with real socket addresses. "+
+			"They can still connect — use reject (default) to deny them.")
+	}
+	return ws
 }
 
 // Source overlays configuration fields it actually provides onto cfg. A Source
@@ -182,6 +207,16 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("config: invalid policy %q (use|require|reject)", c.Policy)
 	}
+	switch c.UntrustedProxyAction {
+	case "reject", "strip":
+	default:
+		return fmt.Errorf("config: invalid untrusted-proxy-action %q (reject|strip)", c.UntrustedProxyAction)
+	}
+	for _, cidr := range c.TrustedNetworks {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("config: invalid trusted-networks entry %q: %w", cidr, err)
+		}
+	}
 	if c.DetectTimeout <= 0 {
 		return fmt.Errorf("config: detect-timeout must be > 0, got %v", c.DetectTimeout)
 	}
@@ -216,6 +251,20 @@ func validFormat(s string) bool {
 		return true
 	}
 	return false
+}
+
+// parseCIDRList splits a comma-separated CIDR string, trims whitespace
+// from each entry, and skips empty strings. Used by envSource and flagSource
+// for the -trusted-networks value.
+func parseCIDRList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // resolveConfigPath returns the config file path and whether it is optional.
@@ -265,6 +314,13 @@ upstream: ""             # REQUIRED: downstream target host:port, e.g. 127.0.0.1
 policy: "use"            # use | require | reject
 detect-timeout: "1s"     # PROXY header detection timeout
 
+# Trust control: only these networks may send PROXY headers.
+# Empty (default) trusts everyone — configure in production to prevent spoofing.
+trusted-networks:
+  # - "10.0.0.0/8"
+  # - "192.168.1.0/24"
+untrusted-proxy-action: "reject"   # reject (default) | strip
+
 log:
   console:              # logs to stderr
     level: "info"        # debug | info | warn | error
@@ -287,7 +343,9 @@ func (defaultsSource) Apply(c *Config) error {
 	c.LogConsoleFormat = "text"
 	c.LogFileLevel = "info"
 	c.LogFileFormat = "text"
+	c.UntrustedProxyAction = "reject"
 	// LogFilePath defaults to "" (file sink off).
+	// TrustedNetworks defaults to nil (trust everyone).
 	// Every field originates from defaults; higher-precedence sources overwrite.
 	for _, f := range configFields {
 		c.mark(f.name, "default")
@@ -311,6 +369,8 @@ type yamlFields struct {
 	Policy        *string `yaml:"policy"`
 	DetectTimeout *string `yaml:"detect-timeout"`
 	Log           *yamlLog `yaml:"log"`
+	TrustedNetworks      []string `yaml:"trusted-networks"`
+	UntrustedProxyAction *string  `yaml:"untrusted-proxy-action"`
 }
 
 type yamlLog struct {
@@ -363,6 +423,14 @@ func (s fileSource) Apply(c *Config) error {
 		}
 		c.DetectTimeout = d
 		c.mark(fDetectTimeout, src)
+	}
+	if y.TrustedNetworks != nil {
+		c.TrustedNetworks = y.TrustedNetworks
+		c.mark(fTrustedNetworks, src)
+	}
+	if y.UntrustedProxyAction != nil {
+		c.UntrustedProxyAction = *y.UntrustedProxyAction
+		c.mark(fUntrustedProxyAction, src)
 	}
 	if y.Log != nil {
 		if y.Log.Console != nil {
@@ -440,6 +508,14 @@ func (envSource) Apply(c *Config) error {
 		c.LogFileFormat = v
 		c.mark(fLogFileFormat, "env")
 	}
+	if v, ok := os.LookupEnv(envPrefix + "TRUSTED_NETWORKS"); ok && v != "" {
+		c.TrustedNetworks = parseCIDRList(v)
+		c.mark(fTrustedNetworks, "env")
+	}
+	if v, ok := os.LookupEnv(envPrefix + "UNTRUSTED_PROXY_ACTION"); ok && v != "" {
+		c.UntrustedProxyAction = v
+		c.mark(fUntrustedProxyAction, "env")
+	}
 	return nil
 }
 
@@ -452,6 +528,8 @@ type flagValues struct {
 	detectTimeout                            *time.Duration
 	logConsoleLevel, logConsoleFormat       *string
 	logFilePath, logFileLevel, logFileFormat *string
+	trustedNetworks                          *string
+	untrustedProxyAction                     *string
 }
 
 func parseFlags(args []string) (*flagValues, map[string]bool, error) {
@@ -468,6 +546,8 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.logFilePath = fs.String("log-file", "", "file log path (empty=disabled)")
 	fv.logFileLevel = fs.String("log-file-level", "", "file log level: debug|info|warn|error")
 	fv.logFileFormat = fs.String("log-file-format", "", "file log format: text|json")
+	fv.trustedNetworks = fs.String("trusted-networks", "", "trusted networks (comma-separated CIDRs, empty=all)")
+	fv.untrustedProxyAction = fs.String("untrusted-proxy-action", "", "action for untrusted sources with PROXY header: reject|strip")
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
 	}
@@ -520,6 +600,14 @@ func (s flagSource) Apply(c *Config) error {
 	if s.set["log-file-format"] {
 		c.LogFileFormat = *s.fv.logFileFormat
 		c.mark(fLogFileFormat, "flag")
+	}
+	if s.set["trusted-networks"] {
+		c.TrustedNetworks = parseCIDRList(*s.fv.trustedNetworks)
+		c.mark(fTrustedNetworks, "flag")
+	}
+	if s.set["untrusted-proxy-action"] {
+		c.UntrustedProxyAction = *s.fv.untrustedProxyAction
+		c.mark(fUntrustedProxyAction, "flag")
 	}
 	return nil
 }

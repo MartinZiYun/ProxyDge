@@ -27,7 +27,7 @@ func TestProvenanceDefaultsAndFlag(t *testing.T) {
 
 func TestProvenanceEnvBeatsFile(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "upstream: 1.1.1.1:1\nlog:\n  console:\n    level: debug\n")
+	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.1.1.1:1\nlog:\n  console:\n    level: debug\n")
 	t.Setenv("PROXYDGE_UPSTREAM", "2.2.2.2:2") // env beats file
 	c, err := Load([]string{"-config", p})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestProvenanceFlagBeatsEnv(t *testing.T) {
 
 func TestProvenanceFileFieldsAll(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "listen: 1.1.1.1:1\nupstream: 2.2.2.2:2\npolicy: require\ndetect-timeout: 250ms\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /tmp/x.log\n    level: warn\n    format: json\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\n")
+	p := writeFile(t, dir, "c.yaml", "version: 1\nlisten: 1.1.1.1:1\nupstream: 2.2.2.2:2\npolicy: require\ndetect-timeout: 250ms\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /tmp/x.log\n    level: warn\n    format: json\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\n")
 	c, err := Load([]string{"-config", p})
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -73,7 +73,7 @@ func TestProvenanceFileFieldsAll(t *testing.T) {
 func TestDescribeContainsSources(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "c.yaml")
-	writeFile(t, dir, "c.yaml", "upstream: 1.2.3.4:80\n")
+	writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\n")
 	t.Setenv("PROXYDGE_POLICY", "reject")
 	t.Setenv("PROXYDGE_UNTRUSTED_PROXY_ACTION", "reject")
 	c, err := Load([]string{"-config", p, "-log-file", "/tmp/x.log", "-trusted-networks", "192.168.0.0/16"})
@@ -117,7 +117,7 @@ func TestDescribeNoFile(t *testing.T) {
 
 func TestProvenanceTrustFields(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "upstream: 1.2.3.4:80\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\n")
+	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\ntrusted-networks:\n  - 10.0.0.0/8\nuntrusted-proxy-action: strip\n")
 	t.Setenv("PROXYDGE_UNTRUSTED_PROXY_ACTION", "reject") // env beats file
 	c, err := Load([]string{"-config", p, "-trusted-networks", "192.168.0.0/16"})
 	if err != nil {

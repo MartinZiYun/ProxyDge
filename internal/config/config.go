@@ -48,7 +48,12 @@ type Config struct {
 	// startup so an operator can see where every value came from.
 	prov       map[string]string
 	loadedFile string
+	Migrated   bool // true if the config file was auto-migrated on load
 }
+
+// currentConfigVersion is the config format version. Bump when new fields are
+// added; old configs with a lower version are auto-migrated on load.
+const currentConfigVersion = 1
 
 // mark records that source provided field. Sources call this as they overlay,
 // so later (higher-precedence) sources overwrite earlier ones — prov[field]
@@ -144,6 +149,16 @@ func (c *Config) Warnings() []string {
 			"They can still connect — use reject (default) to deny them.")
 	}
 	return ws
+}
+
+// MigrationNotice returns a human-readable notice if the config file was
+// auto-migrated on load, or "" if no migration happened. main prints this
+// to stderr after the startup banner.
+func (c *Config) MigrationNotice() string {
+	if !c.Migrated {
+		return ""
+	}
+	return fmt.Sprintf("config file migrated to version %d, backup at %s.bak", currentConfigVersion, c.loadedFile)
 }
 
 // Source overlays configuration fields it actually provides onto cfg. A Source
@@ -314,6 +329,8 @@ const sampleConfig = `# ProxyDge configuration file.
 #
 # Precedence (highest to lowest): CLI flags > env (PROXYDGE_*) > this file > defaults.
 
+version: 1
+
 listen: ":9000"          # listen address (host:port)
 upstream: ""             # REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001
 policy: "use"            # use | require | reject
@@ -369,6 +386,7 @@ type fileSource struct {
 // letting the file source overlay only the keys the user actually wrote. The
 // log section is nested; pointers on the inner structs preserve presence.
 type yamlFields struct {
+	Version               *int     `yaml:"version"`
 	Listen        *string `yaml:"listen"`
 	Upstream      *string `yaml:"upstream"`
 	Policy        *string `yaml:"policy"`
@@ -406,6 +424,32 @@ func (s fileSource) Apply(c *Config) error {
 	if err := yaml.Unmarshal(data, &y); err != nil {
 		return fmt.Errorf("parse %s: %w", s.path, err)
 	}
+
+	// Version check + auto-migration.
+	if y.Version == nil {
+		return fmt.Errorf("parse %s: missing 'version' field, add 'version: %d' or run 'proxydge init'", s.path, currentConfigVersion)
+	}
+	if *y.Version > currentConfigVersion {
+		return fmt.Errorf("parse %s: config version %d is newer than supported version %d, upgrade proxydge", s.path, *y.Version, currentConfigVersion)
+	}
+	if *y.Version < currentConfigVersion {
+		// Parse raw map to preserve unknown fields during migration.
+		var raw map[string]any
+		if err := yaml.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("parse %s: %w", s.path, err)
+		}
+		// Backup must succeed before writing the new file.
+		bakPath := s.path + ".bak"
+		if err := os.WriteFile(bakPath, data, 0o644); err != nil {
+			return fmt.Errorf("migrate %s: backup failed: %w", s.path, err)
+		}
+		migrated := generateMigratedConfig(&y, raw)
+		if err := os.WriteFile(s.path, []byte(migrated), 0o644); err != nil {
+			return fmt.Errorf("migrate %s: write failed: %w", s.path, err)
+		}
+		c.Migrated = true
+	}
+
 	// A file was actually loaded — record it for the startup banner.
 	c.loadedFile = s.path
 	src := "file"
@@ -464,6 +508,92 @@ func (s fileSource) Apply(c *Config) error {
 		}
 	}
 	return nil
+}
+
+// --- config migration (auto-upgrade old config files) ---
+
+// knownConfigKeys is the set of top-level keys ProxyDge understands. Keys
+// not in this set are preserved verbatim during migration.
+var knownConfigKeys = map[string]bool{
+	"version":                true,
+	"listen":                 true,
+	"upstream":               true,
+	"policy":                 true,
+	"detect-timeout":         true,
+	"trusted-networks":       true,
+	"untrusted-proxy-action": true,
+	"log":                    true,
+}
+
+// generateMigratedConfig builds a new config.yaml string from the parsed
+// user fields (preserving their values) + defaults for missing fields +
+// comments. Unknown top-level keys from raw are appended verbatim so the
+// migration never silently drops user content.
+func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
+	var b strings.Builder
+	b.WriteString("# ProxyDge configuration file.\n")
+	b.WriteString("# Auto-migrated by proxydge.\n")
+	b.WriteString("# Precedence (highest to lowest): CLI flags > env (PROXYDGE_*) > this file > defaults.\n\n")
+	fmt.Fprintf(&b, "version: %d\n\n", currentConfigVersion)
+
+	writeStrField(&b, "listen", y.Listen, ":9000", "listen address (host:port)")
+	writeStrField(&b, "upstream", y.Upstream, "", "REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001")
+	writeStrField(&b, "policy", y.Policy, "use", "use | require | reject")
+	writeStrField(&b, "detect-timeout", y.DetectTimeout, "1s", "PROXY header detection timeout")
+
+	b.WriteString("\n# Trust control: only these networks may send PROXY headers.\n")
+	b.WriteString("# Empty (default) trusts everyone — configure in production to prevent spoofing.\n")
+	if len(y.TrustedNetworks) > 0 {
+		b.WriteString("trusted-networks:\n")
+		for _, cidr := range y.TrustedNetworks {
+			fmt.Fprintf(&b, "  - %q\n", cidr)
+		}
+	} else {
+		b.WriteString("trusted-networks:\n  # - \"10.0.0.0/8\"\n  # - \"192.168.1.0/24\"\n")
+	}
+	writeStrField(&b, "untrusted-proxy-action", y.UntrustedProxyAction, "reject", "reject (default) | strip")
+
+	b.WriteString("\nlog:\n")
+	b.WriteString("  console:              # logs to stderr\n")
+	var cl, cf, fl, ff, fp *string
+	if y.Log != nil && y.Log.Console != nil {
+		cl, cf = y.Log.Console.Level, y.Log.Console.Format
+	}
+	if y.Log != nil && y.Log.File != nil {
+		fp, fl, ff = y.Log.File.Path, y.Log.File.Level, y.Log.File.Format
+	}
+	writeStrFieldIndent(&b, "level", cl, "info", "debug | info | warn | error", "    ")
+	writeStrFieldIndent(&b, "format", cf, "text", "text | json", "    ")
+	b.WriteString("  file:                 # logs to a file (path empty => disabled); v1: no rotation\n")
+	writeStrFieldIndent(&b, "path", fp, "", "e.g. /var/log/proxydge.log", "    ")
+	writeStrFieldIndent(&b, "level", fl, "info", "debug | info | warn | error", "    ")
+	writeStrFieldIndent(&b, "format", ff, "json", "text | json", "    ")
+
+	// Preserve unknown top-level fields verbatim.
+	for k, v := range raw {
+		if !knownConfigKeys[k] {
+			b.WriteString("\n")
+			data, _ := yaml.Marshal(map[string]any{k: v})
+			b.Write(data)
+		}
+	}
+	return b.String()
+}
+
+func writeStrField(b *strings.Builder, name string, val *string, def string, comment string) {
+	v := def
+	if val != nil {
+		v = *val
+	}
+	fmt.Fprintf(b, "%s: %q  # %s\n", name, v, comment)
+}
+
+func writeStrFieldIndent(b *strings.Builder, name string, val *string, def string, comment string, indent string) {
+	v := def
+	if val != nil {
+		v = *val
+	}
+	fmt.Fprintf(b, "%s%s: %q  # %s\n", indent, name, v, comment)
 }
 
 // --- env source ---

@@ -29,7 +29,7 @@ func TestDefaultsLog(t *testing.T) {
 
 func TestFileSourceLogNested(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "upstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /var/log/p.log\n    level: warn\n    format: json\n")
+	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n    format: json\n  file:\n    path: /var/log/p.log\n    level: warn\n    format: json\n")
 	var c Config
 	if err := (fileSource{path: p}).Apply(&c); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -45,7 +45,7 @@ func TestFileSourceLogNested(t *testing.T) {
 func TestFileSourceLogPartialConsoleOnly(t *testing.T) {
 	// Only log.console.level present; console.format and file fields untouched.
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "upstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
+	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
 	var c Config
 	c.LogConsoleFormat = "preset-fmt" // absent in file => must survive
 	c.LogFileLevel = "preset-lvl"     // absent => must survive
@@ -87,7 +87,7 @@ func TestEnvSourceLog(t *testing.T) {
 
 func TestLoadLogPrecedenceFlagEnv(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "c.yaml", "upstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
+	writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
 	t.Setenv("PROXYDGE_LOG_CONSOLE_LEVEL", "warn") // env beats file
 	// flag beats env
 	c, err := Load([]string{"-config", filepath.Join(dir, "c.yaml"), "-log-console-level", "info"})

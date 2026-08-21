@@ -81,6 +81,9 @@ func cmdStart(args []string) int {
 	for _, w := range cfg.Warnings() {
 		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
+	if notice := cfg.MigrationNotice(); notice != "" {
+		fmt.Fprintf(os.Stderr, "NOTICE: %s\n", notice)
+	}
 
 	ln, err := transport.Listen("tcp", cfg.Listen)
 	if err != nil {

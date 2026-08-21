@@ -28,3 +28,21 @@ type Conn interface {
 	Write([]byte) (int, error)
 	Close() error
 }
+
+// CloseWriter is an optional capability interface for connection-oriented
+// transports that support half-close (e.g. TCP's FIN). Transports without
+// half-close simply don't implement it. Callers check via type assertion;
+// it is NOT embedded in Conn — a connection may or may not satisfy it.
+type CloseWriter interface {
+	CloseWrite() error
+}
+
+// RemoteIP extracts the remote IP from a connection's peer address. Handles
+// TCP now; UDP can be added later. A helper, not a core abstraction.
+func RemoteIP(c AddrConn) net.IP {
+	switch a := c.RemoteAddr().(type) {
+	case *net.TCPAddr:
+		return a.IP
+	}
+	return nil
+}

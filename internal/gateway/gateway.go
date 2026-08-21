@@ -13,11 +13,11 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sync"
 	"time"
 
 	"proxydge/internal/proxyproto"
 	"proxydge/internal/tcp"
+	"proxydge/internal/transport"
 )
 
 // Policy controls which upstream PROXY headers are permitted.
@@ -99,8 +99,9 @@ func (g *Gateway) Serve() error {
 }
 
 // handle normalizes one inbound connection and pipes it to the downstream.
-// Policy is applied after detection: require rejects direct, reject rejects
-// headers. A malformed detected header is closed without fallback.
+// TCP-specific steps (header detection, dial) are inline; transport-agnostic
+// logic (trust+policy decision, bidirectional pipe) is delegated to decide()
+// and pipeStream().
 func (g *Gateway) handle(c tcp.Conn) {
 	defer c.Close()
 
@@ -117,35 +118,29 @@ func (g *Gateway) handle(c tcp.Conn) {
 		return
 	}
 
-	// Trust check: only trusted networks may send PROXY headers.
-	// remoteIP comes from the TCP socket, never from the PROXY header's SrcIP.
-	// Policy evaluates the normalized source AFTER trust handling, not the raw
-	// presence of a PROXY header.
-	if src != proxyproto.SourceDirect && !g.trust.IsTrusted(remoteIP(c)) {
-		switch g.untrusted {
-		case UntrustedReject:
-			g.log.Info("rejected: untrusted source with PROXY header", "remote", c.RemoteAddr(), "source", src)
-			return
-		case UntrustedStrip:
-			g.log.Info("stripped: untrusted source PROXY header", "remote", c.RemoteAddr(), "source", src)
-			src = proxyproto.SourceDirect
-			hdr = proxyproto.HeaderFromConn(c)
-		}
+	// Transport-agnostic: trust + policy decision. origSrc is saved before
+	// decide() so the caller can log the original source for the strip case
+	// (decide modifies src to SourceDirect when stripping).
+	origSrc := src
+	hdr, src, allow, reason := decide(g.policy, g.trust, g.untrusted, src, hdr, transport.RemoteIP(c), c)
+	if reason == "strip" {
+		g.log.Info("stripped: untrusted source PROXY header", "remote", c.RemoteAddr(), "source", origSrc)
 	}
-
-	switch {
-	case g.policy == PolicyReject && src != proxyproto.SourceDirect:
-		g.log.Info("rejected: policy forbids PROXY header", "remote", c.RemoteAddr(), "policy", g.policy.String())
+	if !allow {
+		switch reason {
+		case "untrusted":
+			g.log.Info("rejected: untrusted source with PROXY header", "remote", c.RemoteAddr(), "source", origSrc)
+		case "policy:forbids":
+			g.log.Info("rejected: policy forbids PROXY header", "remote", c.RemoteAddr(), "policy", g.policy.String())
+		case "policy:requires":
+			g.log.Info("rejected: policy requires PROXY header", "remote", c.RemoteAddr(), "policy", g.policy.String())
+		}
 		return
-	case g.policy == PolicyRequire && src == proxyproto.SourceDirect:
-		g.log.Info("rejected: policy requires PROXY header", "remote", c.RemoteAddr(), "policy", g.policy.String())
-		return
-	case src == proxyproto.SourceDirect:
-		hdr = proxyproto.HeaderFromConn(c)
 	}
 
 	g.log.Info("accept", "remote", c.RemoteAddr(), "source", src, "policy", g.policy.String(), "upstream", g.upstream)
 
+	// TCP-specific: dial downstream.
 	up, err := g.dialer.Dial("tcp", g.upstream)
 	if err != nil {
 		g.log.Warn("downstream dial failed", "upstream", g.upstream, "remote", c.RemoteAddr(), "err", err)
@@ -158,33 +153,7 @@ func (g *Gateway) handle(c tcp.Conn) {
 		return
 	}
 
-	// Bidirectional pipe with TCP half-close. br carries any application bytes
-	// that were peeked during header detection.
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		if _, err := io.Copy(up, br); err != nil {
-			g.log.Debug("pipe error: client→upstream", "remote", c.RemoteAddr(), "err", err)
-		}
-		_ = up.CloseWrite() // client→upstream done → tell downstream via FIN
-	}()
-	go func() {
-		defer wg.Done()
-		if _, err := io.Copy(c, up); err != nil {
-			g.log.Debug("pipe error: upstream→client", "remote", c.RemoteAddr(), "err", err)
-		}
-		_ = c.CloseWrite() // upstream→client done → tell client via FIN
-	}()
-	wg.Wait()
-}
-
-// remoteIP extracts the IP from the connection's real TCP peer address.
-// It never uses the PROXY header's claimed SrcIP — trust decisions must be
-// based on the socket's RemoteAddr.
-func remoteIP(c tcp.Conn) net.IP {
-	if ta, ok := c.RemoteAddr().(*net.TCPAddr); ok {
-		return ta.IP
-	}
-	return nil
+	// Transport-agnostic: bidirectional pipe with optional half-close.
+	// br carries any application bytes that were peeked during header detection.
+	pipeStream(br, c, up, g.log, c.RemoteAddr())
 }

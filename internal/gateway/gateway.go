@@ -2,7 +2,7 @@
 // inbound connections (direct, PROXY v1, or PROXY v2), normalizes them all to a
 // PROXY v2 header, dials a single downstream, writes the header, and pipes
 // bytes both ways with TCP half-close. The gateway depends only on the
-// proxyproto and transport abstractions — never on the go-proxyproto library
+// proxyproto and tcp abstractions — never on the go-proxyproto library
 // or the config/slog-sink wiring directly. It receives a single unified
 // *slog.Logger and is unaware of how many sinks exist.
 package gateway
@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"proxydge/internal/proxyproto"
-	"proxydge/internal/transport"
+	"proxydge/internal/tcp"
 )
 
 // Policy controls which upstream PROXY headers are permitted.
@@ -47,8 +47,8 @@ func (p Policy) String() string {
 // Gateway normalizes inbound PROXY headers (v1/v2/direct) to v2 and pipes to a
 // single downstream target.
 type Gateway struct {
-	ln            transport.Listener
-	dialer        transport.Dialer
+	ln            tcp.Listener
+	dialer        tcp.Dialer
 	reader        proxyproto.Reader
 	writer        proxyproto.Writer
 	policy        Policy
@@ -66,7 +66,7 @@ type Gateway struct {
 // duration, the connection is treated as direct. Pass 0 to block indefinitely
 // (only safe when all upstreams are guaranteed to send a complete header or
 // close). logger may be nil (a discarding logger is used).
-func New(ln transport.Listener, dialer transport.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction) *Gateway {
+func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction) *Gateway {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -101,7 +101,7 @@ func (g *Gateway) Serve() error {
 // handle normalizes one inbound connection and pipes it to the downstream.
 // Policy is applied after detection: require rejects direct, reject rejects
 // headers. A malformed detected header is closed without fallback.
-func (g *Gateway) handle(c transport.Conn) {
+func (g *Gateway) handle(c tcp.Conn) {
 	defer c.Close()
 
 	br := bufio.NewReader(c)
@@ -182,9 +182,9 @@ func (g *Gateway) handle(c transport.Conn) {
 // remoteIP extracts the IP from the connection's real TCP peer address.
 // It never uses the PROXY header's claimed SrcIP — trust decisions must be
 // based on the socket's RemoteAddr.
-func remoteIP(c transport.Conn) net.IP {
-	if tcp, ok := c.RemoteAddr().(*net.TCPAddr); ok {
-		return tcp.IP
+func remoteIP(c tcp.Conn) net.IP {
+	if ta, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+		return ta.IP
 	}
 	return nil
 }

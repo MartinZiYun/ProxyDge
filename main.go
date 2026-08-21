@@ -26,7 +26,7 @@ import (
 	"proxydge/internal/gateway"
 	"proxydge/internal/i18n"
 	"proxydge/internal/proxyproto/goproxyproto"
-	"proxydge/internal/transport"
+	"proxydge/internal/tcp"
 	"proxydge/internal/version"
 )
 
@@ -107,7 +107,7 @@ func cmdStart(args []string) int {
 		fmt.Fprintf(os.Stderr, "NOTICE: %s\n", cat.T(key, args...))
 	}
 
-	ln, err := transport.Listen("tcp", cfg.Listen)
+	ln, err := tcp.Listen("tcp", cfg.Listen)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: listen: %v\n", err)
 		return 1
@@ -127,7 +127,7 @@ func cmdStart(args []string) int {
 	}
 
 	g := gateway.New(
-		ln, transport.TCPDialer{},
+		ln, tcp.TCPDialer{},
 		goproxyproto.NewReader(), goproxyproto.NewWriter(),
 		gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, logger,
 		trust, untrustedProxyAction(cfg.UntrustedProxyAction),

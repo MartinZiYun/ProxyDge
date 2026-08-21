@@ -10,6 +10,8 @@ import (
 	"bufio"
 	"io"
 	"net"
+
+	"proxydge/internal/transport"
 )
 
 // Family is the PROXY Protocol address family.
@@ -61,14 +63,6 @@ func (s Source) String() string {
 	return "unknown"
 }
 
-// AddrConn is the minimal address surface HeaderFromConn needs.
-// transport.Conn satisfies it, so proxyproto does not depend on transport
-// (no import cycle).
-type AddrConn interface {
-	LocalAddr() net.Addr
-	RemoteAddr() net.Addr
-}
-
 // Reader detects and parses a (possibly absent) PROXY Protocol header from br.
 //
 //   - err == nil, src == SourceDirect: no header present (direct connection);
@@ -91,7 +85,7 @@ type Writer interface {
 // Direct connections never emit UNSPEC — the socket addresses are the real
 // client information the gateway exists to preserve. Non-TCP addresses
 // (which cannot yield IP/port) fall back to FamilyUnspec.
-func HeaderFromConn(c AddrConn) Header {
+func HeaderFromConn(c transport.AddrConn) Header {
 	lt, ok1 := c.LocalAddr().(*net.TCPAddr)
 	rt, ok2 := c.RemoteAddr().(*net.TCPAddr)
 	if !ok1 || !ok2 {

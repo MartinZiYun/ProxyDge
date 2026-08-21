@@ -12,7 +12,7 @@ import (
 
 	"proxydge/internal/proxyproto"
 	"proxydge/internal/proxyproto/goproxyproto"
-	"proxydge/internal/transport"
+	"proxydge/internal/tcp"
 )
 
 const tcp4HeaderHex = "0d0a0d0a000d0a515549540a2111000cc0000201c633640104d21f90"
@@ -59,11 +59,11 @@ func startDownstream(t *testing.T) (addr string, recorded chan []byte) {
 // startGateway runs a gateway over real TCP with the production adapters.
 func startGateway(t *testing.T, policy Policy, upstream string) string {
 	t.Helper()
-	ln, err := transport.Listen("tcp", "127.0.0.1:0")
+	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, transport.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -75,7 +75,7 @@ func startGateway(t *testing.T, policy Policy, upstream string) string {
 // it trusted.
 func startGatewayTrusted(t *testing.T, policy Policy, upstream string, trustCIDRs []string, untrusted UntrustedAction) string {
 	t.Helper()
-	ln, err := transport.Listen("tcp", "127.0.0.1:0")
+	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
@@ -83,7 +83,7 @@ func startGatewayTrusted(t *testing.T, policy Policy, upstream string, trustCIDR
 	if err != nil {
 		t.Fatalf("NewTrustChecker: %v", err)
 	}
-	g := New(ln, transport.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()

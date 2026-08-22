@@ -32,6 +32,8 @@ Listens on a port, accepts upstream connections/datagrams (direct / PROXY Protoc
 
 Download the binary for your platform from the [Releases](https://github.com/MartinZiYun/ProxyDge/releases) page.
 
+Dev builds: open the latest successful run in the [Actions list](https://github.com/MartinZiYun/ProxyDge/actions/workflows/push.yml), then download your platform's binary from the Artifacts section.
+
 ### Configure
 
 ```bash

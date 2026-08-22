@@ -32,8 +32,8 @@ func TestDefaultsSource(t *testing.T) {
 	if c.DetectTimeout != time.Second {
 		t.Fatalf("detect-timeout default: want 1s, got %v", c.DetectTimeout)
 	}
-	if c.Upstream != "" {
-		t.Fatalf("upstream default: want empty, got %q", c.Upstream)
+	if c.Upstream != "127.0.0.1:9001" {
+		t.Fatalf("upstream default: want 127.0.0.1:9001, got %q", c.Upstream)
 	}
 }
 
@@ -216,10 +216,10 @@ func TestValidateGood(t *testing.T) {
 // --- Load propagates validation ---
 
 func TestLoadValidationFails(t *testing.T) {
-	// No upstream anywhere → Load must return a validation error.
-	_, err := Load([]string{"-listen", ":0"})
+	// Explicit empty upstream → Load must return a validation error.
+	_, err := Load([]string{"-listen", ":0", "-upstream", ""})
 	if err == nil {
-		t.Fatal("Load should fail validation without upstream")
+		t.Fatal("Load should fail validation with empty upstream")
 	}
 }
 

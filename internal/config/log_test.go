@@ -146,14 +146,21 @@ func TestWriteSampleRoundTrip(t *testing.T) {
 	if err := WriteSample(p); err != nil {
 		t.Fatalf("WriteSample: %v", err)
 	}
-	// The sample has upstream="" (template); loading it without -upstream fails.
-	if _, err := Load([]string{"-config", p}); err == nil {
-		t.Fatal("sample without upstream should fail validation")
-	}
-	// With upstream set, the sample loads and fields match the documented defaults.
-	c, err := Load([]string{"-config", p, "-upstream", "1.2.3.4:80"})
+	// The sample has a default upstream (127.0.0.1:9001); loading it succeeds.
+	c, err := Load([]string{"-config", p})
 	if err != nil {
-		t.Fatalf("load sample: %v", err)
+		t.Fatalf("sample should load with default upstream: %v", err)
+	}
+	if c.Upstream != "127.0.0.1:9001" {
+		t.Fatalf("sample upstream: want 127.0.0.1:9001, got %q", c.Upstream)
+	}
+	// With -upstream flag, the flag overrides the sample's default.
+	c, err = Load([]string{"-config", p, "-upstream", "1.2.3.4:80"})
+	if err != nil {
+		t.Fatalf("load sample with flag: %v", err)
+	}
+	if c.Upstream != "1.2.3.4:80" {
+		t.Fatalf("upstream flag: want 1.2.3.4:80, got %q", c.Upstream)
 	}
 	if c.LogConsoleLevel != "info" || c.LogConsoleFormat != "text" {
 		t.Fatalf("sample console: got %s/%s", c.LogConsoleLevel, c.LogConsoleFormat)

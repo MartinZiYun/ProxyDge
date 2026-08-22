@@ -110,18 +110,24 @@ func New(
 
 // Serve runs the accept loop. Reads datagrams from the listener and dispatches
 // to handleDatagram. Returns when the listener is closed.
+//
 // maxDatagramSize is the maximum size of the complete received UDP datagram
 // (including any PROXY Protocol header). Datagrams exceeding this are dropped
-// — never truncated, never parsed.
+// — never truncated, never parsed. A value of 0 means no limit.
 //
-// The receive buffer is sized larger than maxDatagramSize so that an oversized
-// datagram can be fully read and explicitly dropped. A buffer sized exactly
-// maxDatagramSize would silently truncate, making the size check unreliable.
+// When maxDatagramSize > 0, the receive buffer is sized maxDatagramSize+1 so
+// that an oversized datagram can be detected and explicitly dropped. When
+// maxDatagramSize == 0, the buffer is sized to 65535 (the UDP length-field
+// limit) and no size check is performed.
 func (g *UDPGateway) Serve() error {
-	// +1 is sufficient: ReadFromUDP returns at most len(buf); if n > maxDatagramSize,
-	// we know the datagram exceeded the limit. We don't need the full oversized
-	// content — just enough to detect the overflow.
-	buf := make([]byte, g.maxDatagramSize+1)
+	var buf []byte
+	if g.maxDatagramSize > 0 {
+		// +1 to detect overflow: ReadFromUDP returns at most len(buf).
+		buf = make([]byte, g.maxDatagramSize+1)
+	} else {
+		// 0 = unlimited: use the maximum possible UDP datagram size.
+		buf = make([]byte, 65535)
+	}
 	for {
 		n, peer, err := g.listener.ReadFromUDP(buf)
 		if err != nil {
@@ -131,7 +137,7 @@ func (g *UDPGateway) Serve() error {
 			return err
 		}
 		// Drop oversized datagrams — never truncate, never parse a truncated header.
-		if n > g.maxDatagramSize {
+		if g.maxDatagramSize > 0 && n > g.maxDatagramSize {
 			g.log.Debug("oversized datagram dropped", "remote", peer, "size", n, "max", g.maxDatagramSize)
 			continue
 		}

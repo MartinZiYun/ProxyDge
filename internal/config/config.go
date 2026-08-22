@@ -269,8 +269,8 @@ func (c *Config) Validate() error {
 	if c.MaxSessions <= 0 {
 		return fmt.Errorf("config: max-sessions must be > 0, got %d", c.MaxSessions)
 	}
-	if c.MaxDatagramSize <= 0 {
-		return fmt.Errorf("config: max-datagram-size must be > 0, got %d", c.MaxDatagramSize)
+	if c.MaxDatagramSize < 0 {
+		return fmt.Errorf("config: max-datagram-size must be >= 0 (0=unlimited), got %d", c.MaxDatagramSize)
 	}
 	if c.IdleTimeout <= 0 {
 		return fmt.Errorf("config: idle-timeout must be > 0, got %v", c.IdleTimeout)
@@ -356,8 +356,8 @@ func DefaultConfigPath() string {
 }
 
 // WriteSample writes a commented config.yaml template to path (creating parent
-// directories). The template has upstream empty on purpose so a user must fill
-// it in before the config validates.
+// directories). The template uses the default upstream (127.0.0.1:9001) so it
+// validates out of the box; operators can override via flag/env/edited file.
 func WriteSample(path string) error {
 	if path == "" {
 		return errors.New("config: cannot write sample: empty path")
@@ -377,13 +377,14 @@ const sampleConfig = `# ProxyDge configuration file.
 #
 # Precedence (highest to lowest): CLI flags > env (PROXYDGE_*) > this file > defaults.
 
-version: 2
+version: 2  # config format version — do NOT change; used for auto-migration
 
-listen: ":9000"          # listen address (host:port)
-upstream: ""             # REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001
-policy: "use"            # use | require | reject
-detect-timeout: "1s"     # PROXY header detection timeout
-lang: ""                  # display language: en|zh-CN|zh-TW (empty=auto)
+# ── General ───────────────────────────────────────────────────────────
+protocol: "tcp"                      # tcp (default) | udp — selects gateway mode
+listen: ":9000"                      # listen address (host:port)
+upstream: "127.0.0.1:9001"          # downstream target host:port
+policy: "use"                        # use | require | reject
+lang: ""                             # display language: en|zh-CN|zh-TW (empty=auto)
 
 # Trust control: only these networks may send PROXY headers.
 # Supports CIDR (10.0.0.0/8, 2001:db8::/32) and bare IPs (10.0.0.1, fe80::1).
@@ -393,21 +394,25 @@ trusted-networks:
   # - "192.168.1.0/24"
   # - "2001:db8::/32"
   # - "10.0.0.1"        # bare IP → /32 (IPv4) or /128 (IPv6)
-untrusted-proxy-action: "reject"   # reject (default) | strip
+untrusted-proxy-action: "reject"     # reject (default) | strip
 
-# UDP gateway mode (protocol=udp). Ignored when protocol=tcp.
-protocol: "tcp"           # tcp (default) | udp
-idle-timeout: "30s"       # UDP session idle timeout
-max-sessions: 1024        # max concurrent UDP sessions
-max-datagram-size: 65535  # max datagram size, oversized=drop
-udp-output: "every_datagram"  # every_datagram (default) | first_datagram
+# ── TCP (protocol=tcp) ───────────────────────────────────────────────
+detect-timeout: "1s"                 # PROXY header detection timeout (stream only)
 
+# ── UDP (protocol=udp) ───────────────────────────────────────────────
+# The following fields are only used when protocol=udp.
+idle-timeout: "30s"                  # UDP session idle timeout
+max-sessions: 1024                   # max concurrent UDP sessions
+max-datagram-size: 65535             # max datagram size, 0=unlimited, oversized=drop
+udp-output: "every_datagram"         # every_datagram (default) | first_datagram
+
+# ── Logging ──────────────────────────────────────────────────────────
 log:
-  console:              # logs to stderr
-    level: "info"        # debug | info | warn | error
-    format: "text"       # text | json
-  file:                 # logs to a file (path empty => disabled); v1: no rotation
-    path: ""             # e.g. /var/log/proxydge.log
+  console:                          # logs to stderr
+    level: "info"                    # debug | info | warn | error
+    format: "text"                   # text | json
+  file:                             # logs to a file (path empty => disabled)
+    path: ""                         # e.g. /var/log/proxydge.log
     level: "info"
     format: "json"
 `
@@ -417,6 +422,7 @@ log:
 type defaultsSource struct{}
 
 func (defaultsSource) Apply(c *Config) error {
+	c.Upstream = "127.0.0.1:9001"
 	c.Listen = ":9000"
 	c.Policy = "use"
 	c.DetectTimeout = time.Second

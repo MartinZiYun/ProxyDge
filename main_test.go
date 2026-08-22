@@ -7,9 +7,10 @@ import (
 	"testing"
 )
 
-func TestStartRequiresUpstream(t *testing.T) {
-	if code := run([]string{"start", "-listen", "127.0.0.1:0"}); code != 2 {
-		t.Fatalf("missing -upstream: want exit 2, got %d", code)
+func TestStartEmptyUpstreamFails(t *testing.T) {
+	// Explicitly empty upstream triggers validation error (exit 2).
+	if code := run([]string{"start", "-listen", "127.0.0.1:0", "-upstream", ""}); code != 2 {
+		t.Fatalf("empty -upstream: want exit 2, got %d", code)
 	}
 }
 

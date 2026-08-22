@@ -105,7 +105,7 @@ func TestEnvSource(t *testing.T) {
 	t.Setenv("PROXYDGE_LISTEN", "9.9.9.9:7000")
 	t.Setenv("PROXYDGE_UPSTREAM", "8.8.8.8:6000")
 	t.Setenv("PROXYDGE_POLICY", "reject")
-	t.Setenv("PROXYDGE_DETECT_TIMEOUT", "500ms")
+	t.Setenv("PROXYDGE_TCP_DETECT_TIMEOUT", "500ms")
 	var c Config
 	if err := (envSource{}).Apply(&c); err != nil {
 		t.Fatalf("env: %v", err)
@@ -126,7 +126,7 @@ func TestEnvSourceUnsetLeavesZero(t *testing.T) {
 }
 
 func TestEnvSourceBadDuration(t *testing.T) {
-	t.Setenv("PROXYDGE_DETECT_TIMEOUT", "not-a-duration")
+	t.Setenv("PROXYDGE_TCP_DETECT_TIMEOUT", "not-a-duration")
 	var c Config
 	if err := (envSource{}).Apply(&c); err == nil {
 		t.Fatal("bad duration env should error")

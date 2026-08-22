@@ -769,10 +769,10 @@ func (envSource) Apply(c *Config) error {
 		c.Policy = v
 		c.mark(fPolicy, "env")
 	}
-	if v, ok := os.LookupEnv(envPrefix + "DETECT_TIMEOUT"); ok && v != "" {
+	if v, ok := os.LookupEnv(envPrefix + "TCP_DETECT_TIMEOUT"); ok && v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return fmt.Errorf("%sDETECT_TIMEOUT=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("%sTCP_DETECT_TIMEOUT=%q: %w", envPrefix, v, err)
 		}
 		c.DetectTimeout = d
 		c.mark(fDetectTimeout, "env")
@@ -813,26 +813,26 @@ func (envSource) Apply(c *Config) error {
 		c.Protocol = v
 		c.mark(fProtocol, "env")
 	}
-	if v, ok := os.LookupEnv(envPrefix + "IDLE_TIMEOUT"); ok && v != "" {
+	if v, ok := os.LookupEnv(envPrefix + "UDP_IDLE_TIMEOUT"); ok && v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return fmt.Errorf("%sIDLE_TIMEOUT=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("%sUDP_IDLE_TIMEOUT=%q: %w", envPrefix, v, err)
 		}
 		c.IdleTimeout = d
 		c.mark(fIdleTimeout, "env")
 	}
-	if v, ok := os.LookupEnv(envPrefix + "MAX_SESSIONS"); ok && v != "" {
+	if v, ok := os.LookupEnv(envPrefix + "UDP_MAX_SESSIONS"); ok && v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("%sMAX_SESSIONS=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("%sUDP_MAX_SESSIONS=%q: %w", envPrefix, v, err)
 		}
 		c.MaxSessions = n
 		c.mark(fMaxSessions, "env")
 	}
-	if v, ok := os.LookupEnv(envPrefix + "MAX_DATAGRAM_SIZE"); ok && v != "" {
+	if v, ok := os.LookupEnv(envPrefix + "UDP_MAX_DATAGRAM_SIZE"); ok && v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("%sMAX_DATAGRAM_SIZE=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("%sUDP_MAX_DATAGRAM_SIZE=%q: %w", envPrefix, v, err)
 		}
 		c.MaxDatagramSize = n
 		c.mark(fMaxDatagramSize, "env")
@@ -871,7 +871,7 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.upstream = fs.String("upstream", "", "downstream target host:port (required)")
 	fv.policy = fs.String("policy", "", "upstream header policy: use|require|reject")
 	fv.config = fs.String("config", "", "config file path (overrides exe-dir config.yaml)")
-	fv.detectTimeout = fs.Duration("detect-timeout", 0, "PROXY header detection timeout")
+	fv.detectTimeout = fs.Duration("tcp-detect-timeout", 0, "PROXY header detection timeout (TCP)")
 	fv.lang = fs.String("lang", "", "display language: en|zh-CN|zh-TW (default auto)")
 	fv.logConsoleLevel = fs.String("log-console-level", "", "console log level: debug|info|warn|error")
 	fv.logConsoleFormat = fs.String("log-console-format", "", "console log format: text|json")
@@ -881,9 +881,9 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.trustedNetworks = fs.String("trusted-networks", "", "trusted networks (comma-separated CIDRs, empty=all)")
 	fv.untrustedProxyAction = fs.String("untrusted-proxy-action", "", "action for untrusted sources with PROXY header: reject|strip")
 	fv.protocol = fs.String("protocol", "", "transport protocol: tcp|udp")
-	fv.idleTimeout = fs.Duration("idle-timeout", 0, "UDP session idle timeout")
-	fv.maxSessions = fs.Int("max-sessions", 0, "max concurrent UDP sessions")
-	fv.maxDatagramSize = fs.Int("max-datagram-size", 0, "max datagram size, oversized=drop")
+	fv.idleTimeout = fs.Duration("udp-idle-timeout", 0, "UDP session idle timeout")
+	fv.maxSessions = fs.Int("udp-max-sessions", 0, "max concurrent UDP sessions")
+	fv.maxDatagramSize = fs.Int("udp-max-datagram-size", 0, "max datagram size (0=unlimited)")
 	fv.udpHeaderMode = fs.String("udp-header-mode", "", "UDP header mode: every_datagram|first_datagram")
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
@@ -911,7 +911,7 @@ func (s flagSource) Apply(c *Config) error {
 		c.Policy = *s.fv.policy
 		c.mark(fPolicy, "flag")
 	}
-	if s.set["detect-timeout"] {
+	if s.set["tcp-detect-timeout"] {
 		c.DetectTimeout = *s.fv.detectTimeout
 		c.mark(fDetectTimeout, "flag")
 	}
@@ -954,15 +954,15 @@ func (s flagSource) Apply(c *Config) error {
 		c.Protocol = *s.fv.protocol
 		c.mark(fProtocol, "flag")
 	}
-	if s.set["idle-timeout"] {
+	if s.set["udp-idle-timeout"] {
 		c.IdleTimeout = *s.fv.idleTimeout
 		c.mark(fIdleTimeout, "flag")
 	}
-	if s.set["max-sessions"] {
+	if s.set["udp-max-sessions"] {
 		c.MaxSessions = *s.fv.maxSessions
 		c.mark(fMaxSessions, "flag")
 	}
-	if s.set["max-datagram-size"] {
+	if s.set["udp-max-datagram-size"] {
 		c.MaxDatagramSize = *s.fv.maxDatagramSize
 		c.mark(fMaxDatagramSize, "flag")
 	}

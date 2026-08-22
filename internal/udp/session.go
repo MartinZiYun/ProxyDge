@@ -66,7 +66,10 @@ type UDPSession struct {
 	// first_datagram OUTPUT state (only when outputMode == FirstDatagram)
 	headerSent atomic.Bool
 
-	// first_datagram INPUT state (only when input is first_datagram mode)
+	// Input flow state: when a PROXY header is received on the first datagram
+	// from a source and subsequent datagrams are headerless (auto-detected at
+	// runtime — not a config mode), the parsed Header/Source is stored here so
+	// headerless datagrams can recover the original source.
 	// Persisted ONLY after trust check passes. Deep-copied via cloneHeader.
 	inputSource  atomic.Pointer[proxyproto.Header]
 	inputSrcKind atomic.Pointer[proxyproto.Source]

@@ -156,9 +156,12 @@ first_datagram (compat)   — [PROXY][P1], then [P2]...    requires downstream f
 
 Config concept:
 ```yaml
-proxy_protocol:
-  udp_input: auto          # always auto-detect (direct/first/every)
-  udp_output: every_datagram  # default; first_datagram for compat
+# Input acceptance is controlled by the existing `policy` field:
+#   policy: use      → accept both PROXY and direct (auto-detect input mode)
+#   policy: require → reject direct; PROXY header mandatory
+#   policy: reject  → reject PROXY; direct only
+# No separate udp-input field needed — policy already covers input behavior.
+udp-output: every_datagram  # default; first_datagram for compat
 ```
 
 **`headerSent` is NOT a protocol model concept.** It is an implementation detail of `first_datagram` output mode only. For `every_datagram` output, each datagram is independently encoded — the session carries no protocol state.
@@ -640,9 +643,8 @@ upstream: "127.0.0.1:9001"
 idle-timeout: 30s
 max-sessions: 1024
 max-datagram-size: 65535          # drop oversized, never truncate
-proxy-protocol:
-  udp-input: auto                    # always auto-detect
-  udp-output: every_datagram         # default; first_datagram for compat
+udp-output: every_datagram         # default; first_datagram for compat
+# Input acceptance controlled by `policy` (use|require|reject) — no separate udp-input field.
 ```
 
 ### Struct sketches (design only)

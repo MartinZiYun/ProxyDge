@@ -1,0 +1,24 @@
+# Fast verification on every push to main: vet + tests only. No artifacts,
+# no build-number allocation — the counter in ci.yml's meta job is consumed
+# only by push.yml (manual dev builds) and release.yml (tagged releases).
+name: test
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...

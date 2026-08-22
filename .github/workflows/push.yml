@@ -1,11 +1,9 @@
-# Push workflow: builds a dev artifact (vX.Y.Z-dev.<build>) on push to main.
-# Tags (v*) are handled by release.yml; this ignores them.
+# Dev artifact workflow: builds vX.Y.Z-dev.<build> binaries ON DEMAND via
+# workflow_dispatch (Actions UI or `gh workflow run push.yml`). Automatic
+# verification on push lives in test.yml; tagged releases in release.yml.
 name: push
 
 on:
-  push:
-    branches: [main]
-    tags-ignore: ['v*']
   workflow_dispatch:
 
 permissions:

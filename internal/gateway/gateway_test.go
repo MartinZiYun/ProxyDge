@@ -4,9 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -464,5 +468,114 @@ func TestGatewayTrustedMalformedRejected(t *testing.T) {
 	}
 	if len(buf) != 0 {
 		t.Fatalf("expected EOF, got %q", buf)
+	}
+}
+
+func TestIsTemporaryNetError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"emfile", &net.OpError{Op: "accept", Err: os.NewSyscallError("accept", syscall.EMFILE)}, true},
+		{"enfile", &net.OpError{Op: "accept", Err: os.NewSyscallError("accept", syscall.ENFILE)}, true},
+		{"eintr", &net.OpError{Op: "accept", Err: os.NewSyscallError("accept", syscall.EINTR)}, true},
+		{"timeout", &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}, true},
+		{"connrefused", &net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, false},
+		{"plain", errors.New("boom"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsTemporaryNetError(tt.err); got != tt.want {
+				t.Errorf("IsTemporaryNetError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// tcpTestListener adapts a real *net.TCPListener to the tcp.Listener interface.
+type tcpTestListener struct {
+	ln net.Listener
+}
+
+func (l tcpTestListener) Accept() (tcp.Conn, error) {
+	c, err := l.ln.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return c.(tcp.Conn), nil
+}
+func (l tcpTestListener) Close() error   { return l.ln.Close() }
+func (l tcpTestListener) Addr() net.Addr { return l.ln.Addr() }
+
+// flakyListener fails the first N Accept calls with a transient EMFILE-style
+// error, then delegates to the wrapped listener.
+type flakyListener struct {
+	tcp.Listener
+	remainingFailures atomic.Int64
+}
+
+func (l *flakyListener) Accept() (tcp.Conn, error) {
+	if l.remainingFailures.Add(-1) >= 0 {
+		return nil, &net.OpError{Op: "accept", Err: os.NewSyscallError("accept", syscall.EMFILE)}
+	}
+	return l.Listener.Accept()
+}
+
+// TestServeRetriesTransientAcceptErrors verifies that Serve survives transient
+// accept failures (fd exhaustion) instead of terminating the gateway.
+func TestServeRetriesTransientAcceptErrors(t *testing.T) {
+	downAddr, _ := startDownstream(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	flaky := &flakyListener{Listener: tcpTestListener{ln: ln}}
+	flaky.remainingFailures.Store(2)
+
+	g := New(flaky, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+		PolicyUse, downAddr, time.Second,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	errc := make(chan error, 1)
+	go func() { errc <- g.Serve() }()
+
+	c, err := net.Dial("tcp", flaky.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("ping")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.CloseWrite() // let the downstream echo observe EOF and reply
+	}
+	buf := make([]byte, 0, 64)
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// Downstream echoes verbatim what it received, including the normalized
+	// PROXY v2 header the gateway prepended — assert on the trailing payload.
+	all, err := io.ReadAll(c)
+	buf = append(buf, all...)
+	if err != nil {
+		select {
+		case serveErr := <-errc:
+			t.Fatalf("Serve terminated on transient accept errors instead of retrying: %v", serveErr)
+		default:
+		}
+		t.Fatalf("no echo after transient accept errors: %v", err)
+	}
+	if len(buf) < 28+4 || !bytes.Equal(buf[len(buf)-4:], []byte("ping")) {
+		t.Fatalf("want echo ending in %q, got %x", "ping", buf)
+	}
+
+	_ = flaky.Close()
+	select {
+	case serveErr := <-errc:
+		if serveErr != nil {
+			t.Fatalf("Serve: %v", serveErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not exit after listener close")
 	}
 }

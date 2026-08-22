@@ -134,6 +134,11 @@ func (g *UDPGateway) Serve() error {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			if gateway.IsTemporaryNetError(err) {
+				g.log.Debug("transient read error", "err", err)
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
 			return err
 		}
 		// Drop oversized datagrams — never truncate, never parse a truncated header.

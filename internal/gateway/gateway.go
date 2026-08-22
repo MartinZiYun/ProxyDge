@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"syscall"
 	"time"
 
 	"proxydge/internal/proxyproto"
@@ -85,6 +86,8 @@ func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.W
 }
 
 // Serve runs the accept loop. It returns nil when the listener is closed.
+// Transient accept errors (fd exhaustion, EINTR) are retried after a short
+// backoff instead of terminating the gateway.
 func (g *Gateway) Serve() error {
 	for {
 		c, err := g.ln.Accept()
@@ -92,10 +95,30 @@ func (g *Gateway) Serve() error {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			if IsTemporaryNetError(err) {
+				g.log.Warn("transient accept error", "err", err)
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
 			return err
 		}
 		go g.handle(c)
 	}
+}
+
+// IsTemporaryNetError reports whether err is a transient condition that
+// accept/read loops should tolerate with a retry instead of terminating:
+// EINTR/EAGAIN/EMFILE/ENFILE (POSIX errno values) or a timeout.
+func IsTemporaryNetError(err error) bool {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case syscall.EINTR, syscall.EAGAIN, syscall.EMFILE, syscall.ENFILE:
+			return true
+		}
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // handle normalizes one inbound connection and pipes it to the downstream.

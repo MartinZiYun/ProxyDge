@@ -72,50 +72,63 @@ func (c *Config) mark(field, source string) {
 	c.prov[field] = source
 }
 
-// configField pairs a field's display name with a value accessor and its
-// display group, for Describe.
+// configField is a single entry in the config field registry — the central
+// metadata table that drives Describe output, default-value verification, and
+// template consistency checks. Every user-configurable field has exactly one
+// entry here; adding a field without registering it causes TestFieldRegistry
+// to fail in CI.
 type configField struct {
-	name  string
-	group string
-	value func(*Config) any
+	name    string // v2 display name: "tcp.detect-timeout"
+	section string // "General", "Trust", "TCP", "UDP", "Logging"
+	defVal  any    // default value (for consistency test vs defaultsSource)
+	comment string // inline comment (for documentation)
+	value   func(*Config) any
 }
 
-// configFields is the single source of truth for field names + display order.
-// Sources mark fields using these exact names; Describe prints them in order,
-// grouped by the group field.
+// configFields is the config field registry — the single source of truth for
+// field display names, section grouping, default values, and display order.
+// Describe() iterates this table; defaultsSource is verified against it by
+// TestFieldRegistryConsistency; sampleConfig and generateMigratedConfig must
+// contain every field name listed here.
 var configFields = []configField{
-	{"listen", "connection", func(c *Config) any { return c.Listen }},
-	{"upstream", "connection", func(c *Config) any { return c.Upstream }},
-	{"policy", "proxy header", func(c *Config) any { return c.Policy }},
-	{"detect-timeout", "tcp", func(c *Config) any { return c.DetectTimeout }},
-	{"lang", "proxy header", func(c *Config) any { return c.Lang }},
-	{"trusted-networks", "trust", func(c *Config) any { return c.TrustedNetworks }},
-	{"untrusted-proxy-action", "trust", func(c *Config) any { return c.UntrustedProxyAction }},
-	{"protocol", "connection", func(c *Config) any { return c.Protocol }},
-	{"idle-timeout", "udp", func(c *Config) any { return c.IdleTimeout }},
-	{"max-sessions", "udp", func(c *Config) any { return c.MaxSessions }},
-	{"max-datagram-size", "udp", func(c *Config) any { return c.MaxDatagramSize }},
-	{"udp.header-mode", "udp", func(c *Config) any { return c.UDPHeaderMode }},
-	{"log.console.level", "logging", func(c *Config) any { return c.LogConsoleLevel }},
-	{"log.console.format", "logging", func(c *Config) any { return c.LogConsoleFormat }},
-	{"log.file.path", "logging", func(c *Config) any { return c.LogFilePath }},
-	{"log.file.level", "logging", func(c *Config) any { return c.LogFileLevel }},
-	{"log.file.format", "logging", func(c *Config) any { return c.LogFileFormat }},
+	// ── General
+	{"protocol", "General", "tcp", "tcp (default) | udp — selects gateway mode", func(c *Config) any { return c.Protocol }},
+	{"listen", "General", ":9000", "listen address (host:port)", func(c *Config) any { return c.Listen }},
+	{"upstream", "General", "127.0.0.1:9001", "downstream target host:port", func(c *Config) any { return c.Upstream }},
+	{"policy", "General", "use", "use | require | reject", func(c *Config) any { return c.Policy }},
+	{"lang", "General", "", "display language: en|zh-CN|zh-TW (empty=auto)", func(c *Config) any { return c.Lang }},
+	// ── Trust
+	{"trusted-networks", "Trust", []string(nil), "only these networks may send PROXY headers", func(c *Config) any { return c.TrustedNetworks }},
+	{"untrusted-proxy-action", "Trust", "reject", "reject (default) | strip", func(c *Config) any { return c.UntrustedProxyAction }},
+	// ── TCP
+	{"tcp.detect-timeout", "TCP", time.Second, "PROXY header detection timeout (stream only)", func(c *Config) any { return c.DetectTimeout }},
+	// ── UDP
+	{"udp.idle-timeout", "UDP", 30 * time.Second, "UDP session idle timeout", func(c *Config) any { return c.IdleTimeout }},
+	{"udp.max-sessions", "UDP", 1024, "max concurrent UDP sessions", func(c *Config) any { return c.MaxSessions }},
+	{"udp.max-datagram-size", "UDP", 65535, "max datagram size, 0=unlimited, oversized=drop", func(c *Config) any { return c.MaxDatagramSize }},
+	{"udp.header-mode", "UDP", "every_datagram", "every_datagram (default) | first_datagram", func(c *Config) any { return c.UDPHeaderMode }},
+	// ── Logging
+	{"log.console.level", "Logging", "info", "debug | info | warn | error", func(c *Config) any { return c.LogConsoleLevel }},
+	{"log.console.format", "Logging", "text", "text | json", func(c *Config) any { return c.LogConsoleFormat }},
+	{"log.file.path", "Logging", "", "e.g. /var/log/proxydge.log", func(c *Config) any { return c.LogFilePath }},
+	{"log.file.level", "Logging", "info", "debug | info | warn | error", func(c *Config) any { return c.LogFileLevel }},
+	{"log.file.format", "Logging", "text", "text | json", func(c *Config) any { return c.LogFileFormat }},
 }
 
-// fieldName constants keep the Sources' mark() calls aligned with configFields.
+// fieldName constants keep the Sources' mark() calls aligned with the
+// registry. Each constant must match the corresponding configFields .name.
 const (
+	fProtocol             = "protocol"
 	fListen               = "listen"
 	fUpstream             = "upstream"
 	fPolicy               = "policy"
-	fDetectTimeout        = "detect-timeout"
 	fLang                 = "lang"
 	fTrustedNetworks      = "trusted-networks"
 	fUntrustedProxyAction = "untrusted-proxy-action"
-	fProtocol             = "protocol"
-	fIdleTimeout          = "idle-timeout"
-	fMaxSessions          = "max-sessions"
-	fMaxDatagramSize      = "max-datagram-size"
+	fDetectTimeout        = "tcp.detect-timeout"
+	fIdleTimeout          = "udp.idle-timeout"
+	fMaxSessions          = "udp.max-sessions"
+	fMaxDatagramSize      = "udp.max-datagram-size"
 	fUDPHeaderMode        = "udp.header-mode"
 	fLogConsoleLevel      = "log.console.level"
 	fLogConsoleFormat     = "log.console.format"
@@ -126,8 +139,8 @@ const (
 
 // Describe returns a human-readable dump of every config field with its value
 // and the source that provided it, plus the config file that was loaded (if
-// any). Intended for the startup banner. The file source is shown as just
-// "(file)" — the full path is on the "config file:" line above.
+// any). Intended for the startup banner. Fields are grouped by section
+// (General, Trust, TCP, UDP, Logging) matching the config file structure.
 func (c *Config) Describe() string {
 	var b strings.Builder
 	b.WriteString("config file: ")
@@ -137,8 +150,13 @@ func (c *Config) Describe() string {
 		b.WriteString("(none)")
 	}
 	b.WriteString("\n\n-- config --\n")
+	var lastSection string
 	for _, f := range configFields {
-		fmt.Fprintf(&b, "  %s = %v (%s)\n", f.name, f.value(c), c.sourceOf(f.name))
+		if f.section != lastSection {
+			fmt.Fprintf(&b, "  [%s]\n", f.section)
+			lastSection = f.section
+		}
+		fmt.Fprintf(&b, "    %s = %v (%s)\n", f.name, f.value(c), c.sourceOf(f.name))
 	}
 	b.WriteString("-----------\n")
 	return b.String()
@@ -418,7 +436,7 @@ log:
   file:                             # logs to a file (path empty => disabled)
     path: ""                         # e.g. /var/log/proxydge.log
     level: "info"
-    format: "json"
+    format: "text"
 `
 
 // --- defaults source ---
@@ -783,7 +801,7 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	if fl != nil {
 		flVal = *fl
 	}
-	ffVal := "json"
+	ffVal := "text"
 	if ff != nil {
 		ffVal = *ff
 	}

@@ -442,7 +442,7 @@ untrusted-proxy-action: "reject"     # reject (default) | strip
 # ── TCP (protocol=tcp) ───────────────────────────────────────────────
 tcp:
   detect-timeout: "1s"               # PROXY header detection timeout (0=block indefinitely)
-  idle-timeout: "5m"               # pipe idle timeout, 0=disabled
+  idle-timeout: "5m"                 # pipe idle timeout, 0=disabled
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.

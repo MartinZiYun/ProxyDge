@@ -302,9 +302,10 @@ Rejected: shared upstream socket (`ListenUDP` + `WriteToUDP` + routing table —
 
 ### Max datagram size
 
-- **Max datagram size**: 65535 bytes (UDP max). Configurable lower limit via `max-datagram-size` if needed.
+- **Max datagram size**: 65535 bytes (UDP length-field limit). Note: the maximum IPv4 UDP payload without fragmentation is 65507 bytes; 65535 is the theoretical upper bound. Configurable lower limit via `max-datagram-size`.
+- **Semantics**: `maxDatagramSize` is the maximum size of the **complete received UDP datagram**, including any PROXY Protocol header. It is NOT a payload-only limit.
 - **Oversized datagram = drop**: if `ReadFromUDP` returns `n > maxDatagramSize`, drop the datagram. Never truncate and parse a truncated datagram — a truncated PROXY header or payload would produce incorrect normalization.
-- The `ReadFromUDP` buffer is sized to `maxDatagramSize + PROXY header overhead` (28 bytes IPv4 / 52 bytes IPv6) to accommodate the largest possible datagram.
+- **Buffer detection**: the receive buffer is sized larger than `maxDatagramSize` (+1 byte) so that an oversized datagram can be detected and explicitly dropped. A buffer sized exactly `maxDatagramSize` would silently truncate, making the size check unreliable.
 
 ### [D8] Bidirectional forwarding model
 

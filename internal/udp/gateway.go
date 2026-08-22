@@ -18,7 +18,7 @@ type OutputMode int
 
 const (
 	OutputEveryDatagram OutputMode = iota // default: [PROXY][payload] per datagram
-	OutputFirstDatagram                    // compat: [PROXY][payload] then [payload]...
+	OutputFirstDatagram                   // compat: [PROXY][payload] then [payload]...
 )
 
 func (m OutputMode) String() string {
@@ -45,8 +45,8 @@ func (a udpAddrConn) RemoteAddr() net.Addr { return a.remote }
 // downstream via per-session connected UDP sockets.
 type UDPGateway struct {
 	listener        *net.UDPConn
-	localAddr       net.Addr          // cached listener.LocalAddr()
-	upstreamAddr    *net.UDPAddr      // pre-resolved in New()
+	localAddr       net.Addr     // cached listener.LocalAddr()
+	upstreamAddr    *net.UDPAddr // pre-resolved in New()
 	dgReader        proxyproto.DatagramReader
 	dgWriter        proxyproto.DatagramWriter
 	policy          gateway.Policy
@@ -54,8 +54,8 @@ type UDPGateway struct {
 	untrusted       gateway.UntrustedAction
 	outputMode      OutputMode
 	idleTimeout     time.Duration
-	maxSessions      int64
-	maxDatagramSize  int
+	maxSessions     int64
+	maxDatagramSize int
 	log             *slog.Logger
 	manager         *UDPSessionManager
 }
@@ -101,8 +101,8 @@ func New(
 		untrusted:       untrusted,
 		outputMode:      outputMode,
 		idleTimeout:     idleTimeout,
-		maxSessions:      maxSessions,
-		maxDatagramSize:  maxDatagramSize,
+		maxSessions:     maxSessions,
+		maxDatagramSize: maxDatagramSize,
 		log:             logger,
 		manager:         NewUDPSessionManager(maxSessions),
 	}, nil
@@ -110,13 +110,18 @@ func New(
 
 // Serve runs the accept loop. Reads datagrams from the listener and dispatches
 // to handleDatagram. Returns when the listener is closed.
-// Oversized datagrams (n > maxDatagramSize) are dropped — never truncated.
+// maxDatagramSize is the maximum size of the complete received UDP datagram
+// (including any PROXY Protocol header). Datagrams exceeding this are dropped
+// — never truncated, never parsed.
+//
+// The receive buffer is sized larger than maxDatagramSize so that an oversized
+// datagram can be fully read and explicitly dropped. A buffer sized exactly
+// maxDatagramSize would silently truncate, making the size check unreliable.
 func (g *UDPGateway) Serve() error {
-	// Buffer is sized to maxDatagramSize + 52 (max PROXY v2 header overhead for
-	// IPv6: 12 sig + 4 hdr + 36 addrs = 52). This ensures we can read the full
-	// datagram even when it includes a PROXY header, then check against
-	// maxDatagramSize for the payload portion.
-	buf := make([]byte, g.maxDatagramSize+52)
+	// +1 is sufficient: ReadFromUDP returns at most len(buf); if n > maxDatagramSize,
+	// we know the datagram exceeded the limit. We don't need the full oversized
+	// content — just enough to detect the overflow.
+	buf := make([]byte, g.maxDatagramSize+1)
 	for {
 		n, peer, err := g.listener.ReadFromUDP(buf)
 		if err != nil {
@@ -154,6 +159,7 @@ func (g *UDPGateway) Close() {
 //  7. Persist inputSource (AFTER trust pass, deep-copied)
 //  8. Encode output (FormatDatagram or raw, per outputMode)
 //  9. Forward to upstream
+//
 // 10. Refresh idle timer
 func (g *UDPGateway) handleDatagram(data []byte, actualPeer *net.UDPAddr) {
 	// 1. Parse datagram
@@ -210,8 +216,6 @@ func (g *UDPGateway) handleDatagram(data []byte, actualPeer *net.UDPAddr) {
 		return // 5. DROP — no session created, zero resources consumed
 	}
 
-	g.log.Info("accept", "remote", actualPeer, "source", src, "policy", g.policy.String(), "output", g.outputMode.String())
-
 	// 6. Create session if new
 	if sess == nil {
 		upstream, err := net.DialUDP("udp", nil, g.upstreamAddr)
@@ -229,6 +233,11 @@ func (g *UDPGateway) handleDatagram(data []byte, actualPeer *net.UDPAddr) {
 			}
 			return
 		}
+		// Log session creation at Info (once per session, like TCP's "accept").
+		g.log.Info("accept", "remote", actualPeer, "source", src, "policy", g.policy.String(), "output", g.outputMode.String())
+	} else {
+		// Per-datagram accept at Debug (avoids log flooding at high dps).
+		g.log.Debug("datagram", "remote", actualPeer, "source", src)
 	}
 
 	// 7. Persist inputSource (AFTER trust check, deep-copied)

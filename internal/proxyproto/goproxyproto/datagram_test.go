@@ -137,7 +137,7 @@ func TestParseDatagramMalformed(t *testing.T) {
 func TestParseDatagramMalformedBadLength(t *testing.T) {
 	// Valid sig + ver+cmd + fam+proto, but length field says 9999 (exceeds datagram)
 	sig := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
-	hdr := append(sig, 0x21, 0x12, 0x27, 0x0F) // ver=2, cmd=1, fam=UDP4, length=9999
+	hdr := append(sig, 0x21, 0x12, 0x27, 0x0F)           // ver=2, cmd=1, fam=UDP4, length=9999
 	hdr = append(hdr, bytes.Repeat([]byte{0x00}, 20)...) // some address data (not 9999)
 	_, _, _, err := NewDatagramReader().ParseDatagram(hdr)
 	if err == nil {
@@ -204,5 +204,89 @@ func TestFormatDatagramFreshlyAllocated(t *testing.T) {
 	encoded1[0] = 0xFF
 	if encoded2[0] == 0xFF {
 		t.Fatal("FormatDatagram should return freshly allocated slices (no shared buffer)")
+	}
+}
+
+// --- Parser edge cases ---
+
+func TestParseDatagramTruncatedSigIsDirect(t *testing.T) {
+	// Starts with \r (first byte of v2 sig) but not enough bytes for full sig.
+	// Should be treated as direct, NOT as malformed.
+	data := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d} // 6 bytes, sig is 12
+	hdr, payload, src, err := NewDatagramReader().ParseDatagram(data)
+	if err != nil {
+		t.Fatalf("truncated sig should be direct, got err: %v", err)
+	}
+	if src != pp.SourceDirect {
+		t.Fatalf("src: want Direct, got %v", src)
+	}
+	if !bytes.Equal(payload, data) {
+		t.Fatalf("payload should be original data")
+	}
+	if hdr.Family != pp.FamilyUnspec {
+		t.Fatalf("family: want Unspec, got %v", hdr.Family)
+	}
+}
+
+func TestParseDatagramBadVersion(t *testing.T) {
+	// Valid sig, but version nibble = 1 (not 2)
+	sig := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
+	// ver=1 (high nibble), cmd=1 (low nibble) → 0x11
+	hdr := append(sig, 0x11, 0x12, 0x00, 0x0c) // fam=UDP4, length=12
+	hdr = append(hdr, make([]byte, 12)...)      // 12 bytes address
+	_, _, _, err := NewDatagramReader().ParseDatagram(hdr)
+	if err == nil {
+		t.Fatal("bad version should return error")
+	}
+}
+
+func TestParseDatagramBadCommand(t *testing.T) {
+	// Valid sig, version=2, but command=0 (LOCAL, not PROXY)
+	sig := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
+	// ver=2, cmd=0 → 0x20
+	hdr := append(sig, 0x20, 0x12, 0x00, 0x0c)
+	hdr = append(hdr, make([]byte, 12)...)
+	_, _, _, err := NewDatagramReader().ParseDatagram(hdr)
+	if err == nil {
+		t.Fatal("bad command should return error")
+	}
+}
+
+func TestParseDatagramUnknownFamily(t *testing.T) {
+	// Valid sig, ver=2, cmd=1, but family=0x33 (unspec)
+	sig := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
+	hdr := append(sig, 0x21, 0x33, 0x00, 0x0c)
+	hdr = append(hdr, make([]byte, 12)...)
+	_, _, _, err := NewDatagramReader().ParseDatagram(hdr)
+	if err == nil {
+		t.Fatal("unknown family should return error")
+	}
+}
+
+func TestParseDatagramTLVAreaSkipped(t *testing.T) {
+	// UDP4 header with extra TLV bytes after addresses.
+	// addrLen = 12 (v4 addrs) + 8 (TLV area) = 20
+	sig := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
+	hdr := append(sig, 0x21, 0x12, 0x00, 0x14) // ver=2,cmd=1, fam=UDP4, length=20
+	// 12 bytes address (4+4+2+2)
+	hdr = append(hdr, 192, 0, 2, 1, 198, 51, 100, 1, 0x04, 0xd2, 0x1f, 0x90)
+	// 8 bytes TLV area (type + length + value)
+	hdr = append(hdr, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+	// Payload
+	payload := []byte("DATA")
+	hdr = append(hdr, payload...)
+
+	parsedHdr, parsedPayload, src, err := NewDatagramReader().ParseDatagram(hdr)
+	if err != nil {
+		t.Fatalf("TLV area should be skipped without error: %v", err)
+	}
+	if src != pp.SourceV2 {
+		t.Fatalf("src: want V2, got %v", src)
+	}
+	if !bytes.Equal(parsedPayload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, parsedPayload)
+	}
+	if parsedHdr.Family != pp.FamilyUDP4 {
+		t.Fatalf("family: want UDP4, got %v", parsedHdr.Family)
 	}
 }

@@ -195,12 +195,12 @@ func TestValidateBadPolicy(t *testing.T) {
 
 func TestValidateGood(t *testing.T) {
 	c := Config{
-		Listen:           ":9000",
-		Upstream:         "1.2.3.4:80",
-		Policy:           "use",
-		DetectTimeout:    time.Second,
-		LogConsoleLevel:  "info",
-		LogConsoleFormat: "text",
+		Listen:               ":9000",
+		Upstream:             "1.2.3.4:80",
+		Policy:               "use",
+		DetectTimeout:        time.Second,
+		LogConsoleLevel:      "info",
+		LogConsoleFormat:     "text",
 		UntrustedProxyAction: "reject",
 		Protocol:             "tcp",
 		IdleTimeout:          30 * time.Second,

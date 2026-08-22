@@ -52,9 +52,9 @@ func cloneHeader(h proxyproto.Header) proxyproto.Header {
 // mode-specific implementation details, not protocol concepts.
 type UDPSession struct {
 	key         sessionKey
-	clientAddr  *net.UDPAddr  // for WriteToUDP responses
-	listener    *net.UDPConn  // shared listener (for WriteToUDP to client)
-	upstream    *net.UDPConn  // per-session connected socket
+	clientAddr  *net.UDPAddr // for WriteToUDP responses
+	listener    *net.UDPConn // shared listener (for WriteToUDP to client)
+	upstream    *net.UDPConn // per-session connected socket
 	idleTimeout time.Duration
 	idleTimer   *time.Timer
 	done        chan struct{}
@@ -69,7 +69,7 @@ type UDPSession struct {
 	// first_datagram INPUT state (only when input is first_datagram mode)
 	// Persisted ONLY after trust check passes. Deep-copied via cloneHeader.
 	inputSource  atomic.Pointer[proxyproto.Header]
-	inputSrcKind  atomic.Pointer[proxyproto.Source]
+	inputSrcKind atomic.Pointer[proxyproto.Source]
 }
 
 // newSession creates a UDPSession, starts the idle timer and reader goroutine.
@@ -87,7 +87,7 @@ func newSession(
 		key:         key,
 		clientAddr:  clientAddr,
 		listener:    listener,
-		upstream:     upstream,
+		upstream:    upstream,
 		idleTimeout: idleTimeout,
 		done:        make(chan struct{}),
 		log:         log,
@@ -115,11 +115,11 @@ func (s *UDPSession) refresh() {
 // reader goroutine, and removes from manager. Idempotent via sync.Once.
 func (s *UDPSession) expire() {
 	s.once.Do(func() {
-		close(s.done)               // signal reader goroutine
-		s.idleTimer.Stop()          // stop timer (may have already fired)
-		s.inputSource.Store(nil)    // clear input flow state (security)
-		s.inputSrcKind.Store(nil)   // prevent source port reuse leakage
-		_ = s.upstream.Close()      // unblocks reader's Read()
+		close(s.done)             // signal reader goroutine
+		s.idleTimer.Stop()        // stop timer (may have already fired)
+		s.inputSource.Store(nil)  // clear input flow state (security)
+		s.inputSrcKind.Store(nil) // prevent source port reuse leakage
+		_ = s.upstream.Close()    // unblocks reader's Read()
 		if s.onExpire != nil {
 			s.onExpire(s.key) // remove from manager map
 		}

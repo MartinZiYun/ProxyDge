@@ -358,7 +358,7 @@ func TestSpoofedSrcIPRejected(t *testing.T) {
 		SrcIP:   net.IPv4(10, 0, 0, 1),
 		DstIP:   net.IPv4(198, 51, 100, 1),
 		SrcPort: 1234, DstPort: 8080,
-		Family:  proxyproto.FamilyUDP4,
+		Family: proxyproto.FamilyUDP4,
 	}
 	encoded, _ := goproxyproto.NewDatagramWriter().FormatDatagram(hdr, []byte("PING"))
 	pc, _ := net.Dial("udp", gwAddr)
@@ -642,4 +642,62 @@ func TestUpstreamWriteErrorNoExpiry(t *testing.T) {
 		t.Skip("session count is 0 — Write may have succeeded silently or session expired for other reasons")
 	}
 	pc.Close()
+}
+
+// --- Policy combination tests (UDP path) ---
+
+func TestPolicyRequireRejectsDirect(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyRequire, nil, gateway.UntrustedReject)
+
+	// Direct datagram (no PROXY header) → policy=require must reject
+	pc, _ := net.Dial("udp", gwAddr)
+	_, _ = pc.Write([]byte("PING"))
+	pc.Close()
+	assertNoRecorded(t, recorded, 500*time.Millisecond)
+}
+
+func TestPolicyRequireAllowsProxy(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyRequire, nil, gateway.UntrustedReject)
+
+	payload := []byte("PING")
+	echo := sendAndReceiveEcho(t, gwAddr, makeProxyDatagram(payload), 2*time.Second)
+	rd := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd.hasProxy {
+		t.Fatal("downstream should receive PROXY header")
+	}
+	if !bytes.Equal(rd.payload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, rd.payload)
+	}
+	if !bytes.Equal(echo, payload) {
+		t.Fatalf("echo: want %q, got %q", payload, echo)
+	}
+}
+
+func TestPolicyRejectRejectsProxy(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyReject, nil, gateway.UntrustedReject)
+
+	// PROXY datagram → policy=reject must reject
+	pc, _ := net.Dial("udp", gwAddr)
+	_, _ = pc.Write(makeProxyDatagram([]byte("PING")))
+	pc.Close()
+	assertNoRecorded(t, recorded, 500*time.Millisecond)
+}
+
+func TestPolicyRejectAllowsDirect(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	gwAddr := startTestGatewayFull(t, downAddr, OutputEveryDatagram, gateway.PolicyReject, nil, gateway.UntrustedReject)
+
+	// Direct datagram → policy=reject allows direct
+	payload := []byte("PING")
+	echo := sendAndReceiveEcho(t, gwAddr, payload, 2*time.Second)
+	rd := waitForRecorded(t, recorded, 2*time.Second)
+	if !bytes.Equal(rd.payload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, rd.payload)
+	}
+	if !bytes.Equal(echo, payload) {
+		t.Fatalf("echo: want %q, got %q", payload, echo)
+	}
 }

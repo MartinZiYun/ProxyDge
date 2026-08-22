@@ -79,7 +79,7 @@ func parseV2(data []byte) (pp.Header, []byte, pp.Source, error) {
 
 	// Parse address family + transport protocol.
 	addrStart := sigLen + 4
-	addrData := data[addrStart : headerSize]
+	addrData := data[addrStart:headerSize]
 
 	var hdr pp.Header
 	switch famProto {

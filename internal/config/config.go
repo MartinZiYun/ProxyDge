@@ -26,19 +26,19 @@ import (
 // overlays onto; it is also what the rest of the program consumes. main maps
 // its fields into gateway.New — the gateway never imports this package.
 type Config struct {
-	Listen        string
-	Upstream      string
-	Policy        string
-	DetectTimeout time.Duration
-	Lang                string // display language: "" (auto) | "en" | "zh-CN"
+	Listen               string
+	Upstream             string
+	Policy               string
+	DetectTimeout        time.Duration
+	Lang                 string // display language: "" (auto) | "en" | "zh-CN"
 	TrustedNetworks      []string
-	UntrustedProxyAction  string
-	Protocol        string        // "tcp" (default) | "udp"
-	IdleTimeout     time.Duration // UDP session idle timeout (default 30s)
-	MaxSessions     int           // max concurrent UDP sessions (default 1024)
-	MaxDatagramSize int           // max datagram size, oversized=drop (default 65535)
-	UDPOutput       string        // "every_datagram" (default) | "first_datagram"
-	ConfigPath    string // resolved config file path (meta; not validated)
+	UntrustedProxyAction string
+	Protocol             string        // "tcp" (default) | "udp"
+	IdleTimeout          time.Duration // UDP session idle timeout (default 30s)
+	MaxSessions          int           // max concurrent UDP sessions (default 1024)
+	MaxDatagramSize      int           // max datagram size, oversized=drop (default 65535)
+	UDPOutput            string        // "every_datagram" (default) | "first_datagram"
+	ConfigPath           string        // resolved config file path (meta; not validated)
 
 	// Logging. console and file are independent sinks, each with its own level
 	// and format. The file sink is off when LogFilePath == "". main builds a
@@ -105,11 +105,11 @@ var configFields = []configField{
 
 // fieldName constants keep the Sources' mark() calls aligned with configFields.
 const (
-	fListen            = "listen"
-	fUpstream          = "upstream"
-	fPolicy            = "policy"
-	fDetectTimeout     = "detect-timeout"
-	fLang                  = "lang"
+	fListen               = "listen"
+	fUpstream             = "upstream"
+	fPolicy               = "policy"
+	fDetectTimeout        = "detect-timeout"
+	fLang                 = "lang"
 	fTrustedNetworks      = "trusted-networks"
 	fUntrustedProxyAction = "untrusted-proxy-action"
 	fProtocol             = "protocol"
@@ -117,11 +117,11 @@ const (
 	fMaxSessions          = "max-sessions"
 	fMaxDatagramSize      = "max-datagram-size"
 	fUDPOutput            = "udp-output"
-	fLogConsoleLevel   = "log.console.level"
-	fLogConsoleFormat  = "log.console.format"
-	fLogFilePath       = "log.file.path"
-	fLogFileLevel      = "log.file.level"
-	fLogFileFormat     = "log.file.format"
+	fLogConsoleLevel      = "log.console.level"
+	fLogConsoleFormat     = "log.console.format"
+	fLogFilePath          = "log.file.path"
+	fLogFileLevel         = "log.file.level"
+	fLogFileFormat        = "log.file.format"
 )
 
 // Describe returns a human-readable dump of every config field with its value
@@ -272,8 +272,8 @@ func (c *Config) Validate() error {
 	if c.MaxDatagramSize <= 0 {
 		return fmt.Errorf("config: max-datagram-size must be > 0, got %d", c.MaxDatagramSize)
 	}
-	if c.Protocol == "udp" && c.IdleTimeout <= 0 {
-		return fmt.Errorf("config: idle-timeout must be > 0 when protocol=udp, got %v", c.IdleTimeout)
+	if c.IdleTimeout <= 0 {
+		return fmt.Errorf("config: idle-timeout must be > 0, got %v", c.IdleTimeout)
 	}
 	switch c.Lang {
 	case "", "en", "zh-CN", "zh-TW":
@@ -447,13 +447,13 @@ type fileSource struct {
 // letting the file source overlay only the keys the user actually wrote. The
 // log section is nested; pointers on the inner structs preserve presence.
 type yamlFields struct {
-	Version               *int     `yaml:"version"`
-	Listen        *string `yaml:"listen"`
-	Upstream      *string `yaml:"upstream"`
-	Policy        *string `yaml:"policy"`
-	DetectTimeout *string `yaml:"detect-timeout"`
-	Lang          *string `yaml:"lang"`
-	Log           *yamlLog `yaml:"log"`
+	Version              *int     `yaml:"version"`
+	Listen               *string  `yaml:"listen"`
+	Upstream             *string  `yaml:"upstream"`
+	Policy               *string  `yaml:"policy"`
+	DetectTimeout        *string  `yaml:"detect-timeout"`
+	Lang                 *string  `yaml:"lang"`
+	Log                  *yamlLog `yaml:"log"`
 	TrustedNetworks      []string `yaml:"trusted-networks"`
 	UntrustedProxyAction *string  `yaml:"untrusted-proxy-action"`
 	Protocol             *string  `yaml:"protocol"`
@@ -812,10 +812,10 @@ func (envSource) Apply(c *Config) error {
 // flagValues are the parsed flag pointers (zero defaults: the flag source only
 // applies flags that were explicitly set).
 type flagValues struct {
-	listen, upstream, policy, config        *string
+	listen, upstream, policy, config         *string
 	detectTimeout                            *time.Duration
 	lang                                     *string
-	logConsoleLevel, logConsoleFormat       *string
+	logConsoleLevel, logConsoleFormat        *string
 	logFilePath, logFileLevel, logFileFormat *string
 	trustedNetworks                          *string
 	untrustedProxyAction                     *string

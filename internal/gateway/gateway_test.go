@@ -202,7 +202,7 @@ func TestGatewayRequireRejectsDirect(t *testing.T) {
 	}
 	defer c.Close()
 	_, _ = c.Write([]byte("PING")) // no PROXY header → policy=require must reject
-	buf, _ := io.ReadAll(c)       // gateway closed the connection → EOF
+	buf, _ := io.ReadAll(c)        // gateway closed the connection → EOF
 
 	// Downstream must never be contacted.
 	select {

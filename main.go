@@ -4,10 +4,12 @@
 // header, and pipes it to a single configurable downstream.
 //
 // Usage: proxydge <command> [options]
-//   start    Run the gateway.
-//   init     Write a sample config.yaml.
-//   version  Print version and build info.
-//   help     Show usage.
+//
+//	start    Run the gateway.
+//	init     Write a sample config.yaml.
+//	version  Print version and build info.
+//	help     Show usage.
+//
 // With no command, proxydge prints help.
 package main
 
@@ -212,8 +214,9 @@ func cmdInit(args []string) int {
 
 // cmdVersion prints build info. The metadata comes from the version package
 // (ldflags-injected in CI, falling back to debug.BuildInfo for local builds).
-//   proxydge version           -> detailed multi-line banner
-//   proxydge version --short   -> just the SemVer core, e.g. v0.1.0
+//
+//	proxydge version           -> detailed multi-line banner
+//	proxydge version --short   -> just the SemVer core, e.g. v0.1.0
 func cmdVersion(args []string) int {
 	fs := flag.NewFlagSet("proxydge version", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)

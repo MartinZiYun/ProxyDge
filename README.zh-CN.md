@@ -65,7 +65,8 @@ untrusted-proxy-action: "reject"     # reject（默认）| strip
 
 # ── TCP (protocol=tcp) ─────────────────────────────────────────────
 tcp:
-  detect-timeout: "1s"               # PROXY header 检测超时（仅流模式）
+  detect-timeout: "1s"               # PROXY header 检测超时（0=无限等待）
+  idle-timeout: "5m"               # 管道空闲超时，0=禁用
 
 # ── UDP (protocol=udp) ─────────────────────────────────────────────
 # 以下字段仅在 protocol=udp 时生效
@@ -119,7 +120,8 @@ proxydge <command> [options]
 | `-untrusted-proxy-action <a>` | `reject` | `reject` \| `strip` |
 | `-config <path>` | `<exe-dir>/config.yaml` | 配置文件路径 |
 | `-lang <locale>` | 自动检测 | `en` \| `zh-CN` \| `zh-TW` |
-| `-tcp-detect-timeout <dur>` | `1s` | PROXY header 检测超时 (TCP) |
+| `-tcp-detect-timeout <dur>` | `1s` | PROXY header 检测超时（0=无限等待） |
+| `-tcp-idle-timeout <dur>` | `5m` | 管道空闲超时（0=禁用） |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session 空闲超时 |
 | `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数 |
 | `-udp-max-datagram-size <n>` | `65535` | 最大数据报大小 (0=无限制) |
@@ -128,7 +130,7 @@ proxydge <command> [options]
 | `-log-console-format <f>` | `text` | `text` \| `json` |
 | `-log-file <path>` | （空=禁用） | 文件日志路径 |
 | `-log-file-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `-log-file-format <f>` | `json` | `text` \| `json` |
+| `-log-file-format <f>` | `text` | `text` \| `json` |
 
 ### init 选项
 

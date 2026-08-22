@@ -65,7 +65,8 @@ untrusted-proxy-action: "reject"     # reject (default) | strip
 
 # ── TCP (protocol=tcp) ───────────────────────────────────────────────
 tcp:
-  detect-timeout: "1s"               # PROXY header detection timeout (stream only)
+  detect-timeout: "1s"               # PROXY header detection timeout (0=block indefinitely)
+  idle-timeout: "5m"               # pipe idle timeout, 0=disabled
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.
@@ -119,7 +120,8 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 | `-untrusted-proxy-action <a>` | `reject` | `reject` \| `strip` |
 | `-config <path>` | `<exe-dir>/config.yaml` | Config file path |
 | `-lang <locale>` | auto-detect | `en` \| `zh-CN` \| `zh-TW` |
-| `-tcp-detect-timeout <dur>` | `1s` | PROXY header detection timeout (TCP) |
+| `-tcp-detect-timeout <dur>` | `1s` | PROXY header detection timeout (0=block indefinitely) |
+| `-tcp-idle-timeout <dur>` | `5m` | Pipe idle timeout (0=disabled) |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session idle timeout |
 | `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions |
 | `-udp-max-datagram-size <n>` | `65535` | Max datagram size (0=unlimited) |
@@ -128,7 +130,7 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 | `-log-console-format <f>` | `text` | `text` \| `json` |
 | `-log-file <path>` | (empty = disabled) | File log path |
 | `-log-file-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `-log-file-format <f>` | `json` | `text` \| `json` |
+| `-log-file-format <f>` | `text` | `text` \| `json` |
 
 ### init Options
 

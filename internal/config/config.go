@@ -37,7 +37,7 @@ type Config struct {
 	IdleTimeout          time.Duration // UDP session idle timeout (default 30s)
 	MaxSessions          int           // max concurrent UDP sessions (default 1024)
 	MaxDatagramSize      int           // max datagram size, oversized=drop (default 65535)
-	UDPOutput            string        // "every_datagram" (default) | "first_datagram"
+	UDPHeaderMode        string        // "every_datagram" (default) | "first_datagram"
 	ConfigPath           string        // resolved config file path (meta; not validated)
 
 	// Logging. console and file are independent sinks, each with its own level
@@ -87,7 +87,7 @@ var configFields = []configField{
 	{"listen", "connection", func(c *Config) any { return c.Listen }},
 	{"upstream", "connection", func(c *Config) any { return c.Upstream }},
 	{"policy", "proxy header", func(c *Config) any { return c.Policy }},
-	{"detect-timeout", "proxy header", func(c *Config) any { return c.DetectTimeout }},
+	{"detect-timeout", "tcp", func(c *Config) any { return c.DetectTimeout }},
 	{"lang", "proxy header", func(c *Config) any { return c.Lang }},
 	{"trusted-networks", "trust", func(c *Config) any { return c.TrustedNetworks }},
 	{"untrusted-proxy-action", "trust", func(c *Config) any { return c.UntrustedProxyAction }},
@@ -95,7 +95,7 @@ var configFields = []configField{
 	{"idle-timeout", "udp", func(c *Config) any { return c.IdleTimeout }},
 	{"max-sessions", "udp", func(c *Config) any { return c.MaxSessions }},
 	{"max-datagram-size", "udp", func(c *Config) any { return c.MaxDatagramSize }},
-	{"udp-output", "udp", func(c *Config) any { return c.UDPOutput }},
+	{"udp.header-mode", "udp", func(c *Config) any { return c.UDPHeaderMode }},
 	{"log.console.level", "logging", func(c *Config) any { return c.LogConsoleLevel }},
 	{"log.console.format", "logging", func(c *Config) any { return c.LogConsoleFormat }},
 	{"log.file.path", "logging", func(c *Config) any { return c.LogFilePath }},
@@ -116,7 +116,7 @@ const (
 	fIdleTimeout          = "idle-timeout"
 	fMaxSessions          = "max-sessions"
 	fMaxDatagramSize      = "max-datagram-size"
-	fUDPOutput            = "udp-output"
+	fUDPHeaderMode        = "udp.header-mode"
 	fLogConsoleLevel      = "log.console.level"
 	fLogConsoleFormat     = "log.console.format"
 	fLogFilePath          = "log.file.path"
@@ -261,10 +261,10 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("config: invalid protocol %q (tcp|udp)", c.Protocol)
 	}
-	switch c.UDPOutput {
+	switch c.UDPHeaderMode {
 	case "every_datagram", "first_datagram":
 	default:
-		return fmt.Errorf("config: invalid udp-output %q (every_datagram|first_datagram)", c.UDPOutput)
+		return fmt.Errorf("config: invalid udp.header-mode %q (every_datagram|first_datagram)", c.UDPHeaderMode)
 	}
 	if c.MaxSessions <= 0 {
 		return fmt.Errorf("config: max-sessions must be > 0, got %d", c.MaxSessions)
@@ -397,14 +397,16 @@ trusted-networks:
 untrusted-proxy-action: "reject"     # reject (default) | strip
 
 # ── TCP (protocol=tcp) ───────────────────────────────────────────────
-detect-timeout: "1s"                 # PROXY header detection timeout (stream only)
+tcp:
+  detect-timeout: "1s"               # PROXY header detection timeout (stream only)
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.
-idle-timeout: "30s"                  # UDP session idle timeout
-max-sessions: 1024                   # max concurrent UDP sessions
-max-datagram-size: 65535             # max datagram size, 0=unlimited, oversized=drop
-udp-output: "every_datagram"         # every_datagram (default) | first_datagram
+udp:
+  idle-timeout: "30s"               # UDP session idle timeout
+  max-sessions: 1024                # max concurrent UDP sessions
+  max-datagram-size: 65535          # max datagram size, 0=unlimited, oversized=drop
+  header-mode: every_datagram       # every_datagram (default) | first_datagram
 
 # ── Logging ──────────────────────────────────────────────────────────
 log:
@@ -435,7 +437,7 @@ func (defaultsSource) Apply(c *Config) error {
 	c.IdleTimeout = 30 * time.Second
 	c.MaxSessions = 1024
 	c.MaxDatagramSize = 65535
-	c.UDPOutput = "every_datagram"
+	c.UDPHeaderMode = "every_datagram"
 	// LogFilePath defaults to "" (file sink off).
 	// TrustedNetworks defaults to nil (trust everyone).
 	// Every field originates from defaults; higher-precedence sources overwrite.
@@ -460,16 +462,24 @@ type yamlFields struct {
 	Listen               *string  `yaml:"listen"`
 	Upstream             *string  `yaml:"upstream"`
 	Policy               *string  `yaml:"policy"`
-	DetectTimeout        *string  `yaml:"detect-timeout"`
 	Lang                 *string  `yaml:"lang"`
-	Log                  *yamlLog `yaml:"log"`
 	TrustedNetworks      []string `yaml:"trusted-networks"`
 	UntrustedProxyAction *string  `yaml:"untrusted-proxy-action"`
 	Protocol             *string  `yaml:"protocol"`
-	IdleTimeout          *string  `yaml:"idle-timeout"`
-	MaxSessions          *int     `yaml:"max-sessions"`
-	MaxDatagramSize      *int     `yaml:"max-datagram-size"`
-	UDPOutput            *string  `yaml:"udp-output"`
+	TCP                  *yamlTCP `yaml:"tcp"`
+	UDP                  *yamlUDP `yaml:"udp"`
+	Log                  *yamlLog `yaml:"log"`
+}
+
+type yamlTCP struct {
+	DetectTimeout *string `yaml:"detect-timeout"`
+}
+
+type yamlUDP struct {
+	IdleTimeout     *string `yaml:"idle-timeout"`
+	MaxSessions     *int    `yaml:"max-sessions"`
+	MaxDatagramSize *int    `yaml:"max-datagram-size"`
+	HeaderMode      *string `yaml:"header-mode"`
 }
 
 type yamlLog struct {
@@ -541,10 +551,10 @@ func (s fileSource) Apply(c *Config) error {
 		c.Policy = *y.Policy
 		c.mark(fPolicy, src)
 	}
-	if y.DetectTimeout != nil {
-		d, derr := time.ParseDuration(*y.DetectTimeout)
+	if y.TCP != nil && y.TCP.DetectTimeout != nil {
+		d, derr := time.ParseDuration(*y.TCP.DetectTimeout)
 		if derr != nil {
-			return fmt.Errorf("parse %s: detect-timeout %q: %w", s.path, *y.DetectTimeout, derr)
+			return fmt.Errorf("parse %s: detect-timeout %q: %w", s.path, *y.TCP.DetectTimeout, derr)
 		}
 		c.DetectTimeout = d
 		c.mark(fDetectTimeout, src)
@@ -565,25 +575,27 @@ func (s fileSource) Apply(c *Config) error {
 		c.Protocol = *y.Protocol
 		c.mark(fProtocol, src)
 	}
-	if y.IdleTimeout != nil {
-		d, derr := time.ParseDuration(*y.IdleTimeout)
-		if derr != nil {
-			return fmt.Errorf("parse %s: idle-timeout %q: %w", s.path, *y.IdleTimeout, derr)
+	if y.UDP != nil {
+		if y.UDP.IdleTimeout != nil {
+			d, derr := time.ParseDuration(*y.UDP.IdleTimeout)
+			if derr != nil {
+				return fmt.Errorf("parse %s: idle-timeout %q: %w", s.path, *y.UDP.IdleTimeout, derr)
+			}
+			c.IdleTimeout = d
+			c.mark(fIdleTimeout, src)
 		}
-		c.IdleTimeout = d
-		c.mark(fIdleTimeout, src)
-	}
-	if y.MaxSessions != nil {
-		c.MaxSessions = *y.MaxSessions
-		c.mark(fMaxSessions, src)
-	}
-	if y.MaxDatagramSize != nil {
-		c.MaxDatagramSize = *y.MaxDatagramSize
-		c.mark(fMaxDatagramSize, src)
-	}
-	if y.UDPOutput != nil {
-		c.UDPOutput = *y.UDPOutput
-		c.mark(fUDPOutput, src)
+		if y.UDP.MaxSessions != nil {
+			c.MaxSessions = *y.UDP.MaxSessions
+			c.mark(fMaxSessions, src)
+		}
+		if y.UDP.MaxDatagramSize != nil {
+			c.MaxDatagramSize = *y.UDP.MaxDatagramSize
+			c.mark(fMaxDatagramSize, src)
+		}
+		if y.UDP.HeaderMode != nil {
+			c.UDPHeaderMode = *y.UDP.HeaderMode
+			c.mark(fUDPHeaderMode, src)
+		}
 	}
 	if y.Log != nil {
 		if y.Log.Console != nil {
@@ -623,15 +635,12 @@ var knownConfigKeys = map[string]bool{
 	"listen":                 true,
 	"upstream":               true,
 	"policy":                 true,
-	"detect-timeout":         true,
 	"lang":                   true,
 	"trusted-networks":       true,
 	"untrusted-proxy-action": true,
 	"protocol":               true,
-	"idle-timeout":           true,
-	"max-sessions":           true,
-	"max-datagram-size":      true,
-	"udp-output":             true,
+	"tcp":                    true,
+	"udp":                    true,
 	"log":                    true,
 }
 
@@ -649,7 +658,6 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	writeStrField(&b, "listen", y.Listen, ":9000", "listen address (host:port)")
 	writeStrField(&b, "upstream", y.Upstream, "", "REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001")
 	writeStrField(&b, "policy", y.Policy, "use", "use | require | reject")
-	writeStrField(&b, "detect-timeout", y.DetectTimeout, "1s", "PROXY header detection timeout")
 	writeStrField(&b, "lang", y.Lang, "", "display language: en|zh-CN (empty=auto)")
 
 	b.WriteString("\n# Trust control: only these networks may send PROXY headers.\n")
@@ -664,20 +672,40 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	}
 	writeStrField(&b, "untrusted-proxy-action", y.UntrustedProxyAction, "reject", "reject (default) | strip")
 
-	b.WriteString("\n# UDP gateway mode (protocol=udp). Ignored when protocol=tcp.\n")
-	writeStrField(&b, "protocol", y.Protocol, "tcp", "tcp (default) | udp")
-	writeStrField(&b, "idle-timeout", y.IdleTimeout, "30s", "UDP session idle timeout")
-	maxSessions := 1024
-	if y.MaxSessions != nil {
-		maxSessions = *y.MaxSessions
+	var detectTimeout *string
+	if y.TCP != nil {
+		detectTimeout = y.TCP.DetectTimeout
 	}
-	fmt.Fprintf(&b, "max-sessions: %d  # max concurrent UDP sessions\n", maxSessions)
-	maxDatagramSize := 65535
-	if y.MaxDatagramSize != nil {
-		maxDatagramSize = *y.MaxDatagramSize
+	b.WriteString("\n# ── TCP (protocol=tcp) ───────────────────────────────────────────────\n")
+	b.WriteString("tcp:\n")
+	writeStrFieldIndent(&b, "detect-timeout", detectTimeout, "1s", "PROXY header detection timeout (stream only)", "  ")
+
+	var idleTimeout *string
+	var maxSessions *int
+	var maxDatagramSize *int
+	var headerMode *string
+	if y.UDP != nil {
+		idleTimeout = y.UDP.IdleTimeout
+		maxSessions = y.UDP.MaxSessions
+		maxDatagramSize = y.UDP.MaxDatagramSize
+		headerMode = y.UDP.HeaderMode
 	}
-	fmt.Fprintf(&b, "max-datagram-size: %d  # max datagram size, oversized=drop\n", maxDatagramSize)
-	writeStrField(&b, "udp-output", y.UDPOutput, "every_datagram", "every_datagram (default) | first_datagram")
+	b.WriteString("\n# ── UDP (protocol=udp) ───────────────────────────────────────────────\n")
+	b.WriteString("# The following fields are only used when protocol=udp.\n")
+	writeStrField(&b, "protocol", y.Protocol, "tcp", "tcp (default) | udp — selects gateway mode")
+	b.WriteString("udp:\n")
+	writeStrFieldIndent(&b, "idle-timeout", idleTimeout, "30s", "UDP session idle timeout", "  ")
+	ms := 1024
+	if maxSessions != nil {
+		ms = *maxSessions
+	}
+	fmt.Fprintf(&b, "  max-sessions: %d  # max concurrent UDP sessions\n", ms)
+	mds := 65535
+	if maxDatagramSize != nil {
+		mds = *maxDatagramSize
+	}
+	fmt.Fprintf(&b, "  max-datagram-size: %d  # max datagram size, 0=unlimited, oversized=drop\n", mds)
+	writeStrFieldIndent(&b, "header-mode", headerMode, "every_datagram", "every_datagram (default) | first_datagram", "  ")
 
 	b.WriteString("\nlog:\n")
 	b.WriteString("  console:              # logs to stderr\n")
@@ -809,9 +837,9 @@ func (envSource) Apply(c *Config) error {
 		c.MaxDatagramSize = n
 		c.mark(fMaxDatagramSize, "env")
 	}
-	if v, ok := os.LookupEnv(envPrefix + "UDP_OUTPUT"); ok && v != "" {
-		c.UDPOutput = v
-		c.mark(fUDPOutput, "env")
+	if v, ok := os.LookupEnv(envPrefix + "UDP_HEADER_MODE"); ok && v != "" {
+		c.UDPHeaderMode = v
+		c.mark(fUDPHeaderMode, "env")
 	}
 	return nil
 }
@@ -832,7 +860,7 @@ type flagValues struct {
 	idleTimeout                              *time.Duration
 	maxSessions                              *int
 	maxDatagramSize                          *int
-	udpOutput                                *string
+	udpHeaderMode                            *string
 }
 
 func parseFlags(args []string) (*flagValues, map[string]bool, error) {
@@ -856,7 +884,7 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.idleTimeout = fs.Duration("idle-timeout", 0, "UDP session idle timeout")
 	fv.maxSessions = fs.Int("max-sessions", 0, "max concurrent UDP sessions")
 	fv.maxDatagramSize = fs.Int("max-datagram-size", 0, "max datagram size, oversized=drop")
-	fv.udpOutput = fs.String("udp-output", "", "UDP output mode: every_datagram|first_datagram")
+	fv.udpHeaderMode = fs.String("udp-header-mode", "", "UDP header mode: every_datagram|first_datagram")
 	if err := fs.Parse(args); err != nil {
 		return nil, nil, err
 	}
@@ -938,9 +966,9 @@ func (s flagSource) Apply(c *Config) error {
 		c.MaxDatagramSize = *s.fv.maxDatagramSize
 		c.mark(fMaxDatagramSize, "flag")
 	}
-	if s.set["udp-output"] {
-		c.UDPOutput = *s.fv.udpOutput
-		c.mark(fUDPOutput, "flag")
+	if s.set["udp-header-mode"] {
+		c.UDPHeaderMode = *s.fv.udpHeaderMode
+		c.mark(fUDPHeaderMode, "flag")
 	}
 	return nil
 }

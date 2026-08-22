@@ -41,7 +41,7 @@ func TestDefaultsSource(t *testing.T) {
 
 func TestFileSourceYAML(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 1\nlisten: 1.2.3.4:8000\nupstream: 10.0.0.1:5000\npolicy: require\ndetect-timeout: 250ms\n")
+	p := writeFile(t, dir, "c.yaml", "version: 2\nlisten: 1.2.3.4:8000\nupstream: 10.0.0.1:5000\npolicy: require\ntcp:\n  detect-timeout: 250ms\n")
 	var c Config
 	if err := (fileSource{path: p}).Apply(&c); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -137,7 +137,7 @@ func TestEnvSourceBadDuration(t *testing.T) {
 
 func TestLoadPriorityFlagsOverEnvOverFileOverDefaults(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "c.yaml", "version: 1\nlisten: 1.1.1.1:1000\nupstream: 2.2.2.2:2000\npolicy: require\ndetect-timeout: 100ms\n")
+	writeFile(t, dir, "c.yaml", "version: 2\nlisten: 1.1.1.1:1000\nupstream: 2.2.2.2:2000\npolicy: require\ntcp:\n  detect-timeout: 100ms\n")
 	t.Setenv("PROXYDGE_UPSTREAM", "3.3.3.3:3000") // env beats file
 	t.Setenv("PROXYDGE_POLICY", "reject")         // env beats file
 	// flags beat env on listen + policy
@@ -206,7 +206,7 @@ func TestValidateGood(t *testing.T) {
 		IdleTimeout:          30 * time.Second,
 		MaxSessions:          1024,
 		MaxDatagramSize:      65535,
-		UDPOutput:            "every_datagram",
+		UDPHeaderMode:        "every_datagram",
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid config: %v", err)

@@ -132,7 +132,7 @@ func cmdStart(args []string) int {
 		g, err := udp.New(
 			cfg.Listen, cfg.Upstream,
 			gatewayPolicy(cfg.Policy), trust, untrustedProxyAction(cfg.UntrustedProxyAction),
-			udpOutputMode(cfg.UDPOutput),
+			udpHeaderMode(cfg.UDPHeaderMode),
 			cfg.IdleTimeout, int64(cfg.MaxSessions), cfg.MaxDatagramSize,
 			logger,
 		)
@@ -306,10 +306,10 @@ func untrustedProxyAction(s string) gateway.UntrustedAction {
 	return gateway.UntrustedReject
 }
 
-// udpOutputMode maps the validated config string to the UDP gateway's enum.
+// udpHeaderMode maps the validated config string to the UDP gateway's enum.
 // It is in main (not the config package) so the udp package stays free of
 // config imports.
-func udpOutputMode(s string) udp.OutputMode {
+func udpHeaderMode(s string) udp.OutputMode {
 	if s == "first_datagram" {
 		return udp.OutputFirstDatagram
 	}

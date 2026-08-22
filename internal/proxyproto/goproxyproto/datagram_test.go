@@ -233,7 +233,7 @@ func TestParseDatagramBadVersion(t *testing.T) {
 	sig := []byte{0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a}
 	// ver=1 (high nibble), cmd=1 (low nibble) → 0x11
 	hdr := append(sig, 0x11, 0x12, 0x00, 0x0c) // fam=UDP4, length=12
-	hdr = append(hdr, make([]byte, 12)...)      // 12 bytes address
+	hdr = append(hdr, make([]byte, 12)...)     // 12 bytes address
 	_, _, _, err := NewDatagramReader().ParseDatagram(hdr)
 	if err == nil {
 		t.Fatal("bad version should return error")

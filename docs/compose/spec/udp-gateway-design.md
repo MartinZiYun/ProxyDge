@@ -533,6 +533,20 @@ trust.IsTrusted(transport.RemoteIP(actualPeer))
 - If no trusted PROXY header: `ActualPeer` is the direct source — `HeaderFromAddrs(actualPeer, listenerAddr)` builds the header.
 - Session expiry clears input flow state — prevents source port reuse attacks (see [D9]).
 
+### IPv6 Zone Identifier Limitation
+
+IPv6 Zone identifiers are local socket-scoped metadata and are not
+represented by the PROXY Protocol v2 wire format.
+
+ProxyDge:
+- MUST preserve Zone when identifying/routing UDP sessions locally.
+- MUST NOT attempt to encode Zone into the standard PROXY v2 IPv6
+  address field.
+- MUST NOT introduce a private TLV solely for Zone propagation.
+- Downstream PROXY v2 consumers receive the IPv6 address without Zone.
+
+This is a protocol-level limitation, not a ProxyDge implementation error.
+
 ### [D14] Failure / recreation behavior
 
 | Scenario | Behavior |

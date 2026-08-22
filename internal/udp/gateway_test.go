@@ -701,3 +701,155 @@ func TestPolicyRejectAllowsDirect(t *testing.T) {
 		t.Fatalf("echo: want %q, got %q", payload, echo)
 	}
 }
+
+// --- IPv6 integration tests ---
+
+func startTestDownstreamIPv6(t *testing.T) (addr string, recorded chan receivedDatagram) {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Fatalf("downstream listen ipv6: %v", err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	recorded = make(chan receivedDatagram, 64)
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, peer, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			rd := receivedDatagram{payload: data}
+			if len(data) >= len(proxyV2Sig) && bytes.Equal(data[:len(proxyV2Sig)], proxyV2Sig) {
+				rd.hasProxy = true
+				dr := goproxyproto.NewDatagramReader()
+				hdr, payload, _, err := dr.ParseDatagram(data)
+				if err == nil {
+					rd.payload = payload
+					rd.srcIP = hdr.SrcIP
+					rd.srcPort = hdr.SrcPort
+				}
+			}
+			recorded <- rd
+			_, _ = pc.WriteToUDP(rd.payload, peer)
+		}
+	}()
+	return pc.LocalAddr().String(), recorded
+}
+
+func startTestGatewayIPv6(t *testing.T, downstream string) string {
+	t.Helper()
+	g, err := New(
+		"[::1]:0", downstream,
+		gateway.PolicyUse, nil, gateway.UntrustedReject,
+		OutputEveryDatagram, 30*time.Second, 1024, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("gateway ipv6: %v", err)
+	}
+	t.Cleanup(func() { g.Close() })
+	go func() { _ = g.Serve() }()
+	time.Sleep(50 * time.Millisecond)
+	return g.listener.LocalAddr().String()
+}
+
+func makeProxyDatagramIPv6(payload []byte) []byte {
+	hdr := proxyproto.Header{
+		SrcIP:   net.ParseIP("2001:db8::1"),
+		DstIP:   net.ParseIP("2001:db8::2"),
+		SrcPort: 1234,
+		DstPort: 8080,
+		Family:  proxyproto.FamilyUDP6,
+	}
+	encoded, err := goproxyproto.NewDatagramWriter().FormatDatagram(hdr, payload)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}
+
+func TestIPv6DirectToEvery(t *testing.T) {
+	downAddr, recorded := startTestDownstreamIPv6(t)
+	gwAddr := startTestGatewayIPv6(t, downAddr)
+
+	payload := []byte("PING6")
+	echo := sendAndReceiveEcho(t, gwAddr, payload, 2*time.Second)
+
+	rd := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd.hasProxy {
+		t.Fatal("downstream should receive PROXY header (every_datagram)")
+	}
+	if !bytes.Equal(rd.payload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, rd.payload)
+	}
+	if !bytes.Equal(echo, payload) {
+		t.Fatalf("echo: want %q, got %q", payload, echo)
+	}
+	// Source should be ::1 (actual peer), not a fake address
+	if rd.srcIP == nil || !rd.srcIP.Equal(net.IPv6loopback) {
+		t.Fatalf("srcIP: want ::1, got %s", rd.srcIP)
+	}
+}
+
+func TestIPv6EveryToEvery(t *testing.T) {
+	downAddr, recorded := startTestDownstreamIPv6(t)
+	gwAddr := startTestGatewayIPv6(t, downAddr)
+
+	payload := []byte("PROXY6")
+	echo := sendAndReceiveEcho(t, gwAddr, makeProxyDatagramIPv6(payload), 2*time.Second)
+
+	rd := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd.hasProxy {
+		t.Fatal("downstream should receive PROXY header")
+	}
+	if !bytes.Equal(rd.payload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, rd.payload)
+	}
+	// Source should be from the PROXY header (2001:db8::1), since trust=nil (trust all)
+	if rd.srcIP == nil || !rd.srcIP.Equal(net.ParseIP("2001:db8::1")) {
+		t.Fatalf("srcIP: want 2001:db8::1 (from PROXY header), got %s", rd.srcIP)
+	}
+	if !bytes.Equal(echo, payload) {
+		t.Fatalf("echo: want %q, got %q", payload, echo)
+	}
+}
+
+func TestIPv6DirectToFirst(t *testing.T) {
+	downAddr, recorded := startTestDownstreamIPv6(t)
+	g, err := New(
+		"[::1]:0", downAddr,
+		gateway.PolicyUse, nil, gateway.UntrustedReject,
+		OutputFirstDatagram, 30*time.Second, 1024, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("gateway: %v", err)
+	}
+	t.Cleanup(func() { g.Close() })
+	go func() { _ = g.Serve() }()
+	time.Sleep(50 * time.Millisecond)
+	gwAddr := g.listener.LocalAddr().String()
+
+	p1 := []byte("PING6-1")
+	p2 := []byte("PING6-2")
+	sendMultipleOnSameSocket(t, gwAddr, [][]byte{p1, p2}, 2*time.Second)
+
+	rd1 := waitForRecorded(t, recorded, 2*time.Second)
+	if !rd1.hasProxy {
+		t.Fatal("first: should have PROXY header (first_datagram output)")
+	}
+	if !bytes.Equal(rd1.payload, p1) {
+		t.Fatalf("payload1: want %q, got %q", p1, rd1.payload)
+	}
+
+	rd2 := waitForRecorded(t, recorded, 2*time.Second)
+	if rd2.hasProxy {
+		t.Fatal("second: should NOT have PROXY header (first_datagram output)")
+	}
+	if !bytes.Equal(rd2.payload, p2) {
+		t.Fatalf("payload2: want %q, got %q", p2, rd2.payload)
+	}
+}

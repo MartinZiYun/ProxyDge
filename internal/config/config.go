@@ -63,6 +63,23 @@ type Config struct {
 // added; old configs with a lower version are auto-migrated on load.
 const currentConfigVersion = 2
 
+// ConfigError carries an i18n message key so main.go can translate it.
+// The msg field is an English fallback for Go's error chain (logging, %w wrapping).
+// Non-ConfigError errors (e.g. from file I/O or yaml parsing) fall back to English.
+type ConfigError struct {
+	Key  string
+	Args []any
+	msg  string
+}
+
+func (e *ConfigError) Error() string { return e.msg }
+
+// cfgErr creates a ConfigError with an i18n key and English fallback.
+// args are shared between the English format and the i18n template.
+func cfgErr(key, format string, args ...any) *ConfigError {
+	return &ConfigError{Key: key, Args: args, msg: fmt.Sprintf(format, args...)}
+}
+
 // mark records that source provided field. Sources call this as they overlay,
 // so later (higher-precedence) sources overwrite earlier ones — prov[field]
 // ends up being the winning source.
@@ -265,67 +282,67 @@ func Load(args []string) (*Config, error) {
 // Validate is the single place configuration correctness is checked.
 func (c *Config) Validate() error {
 	if c.Upstream == "" {
-		return errors.New("config: -upstream must not be empty")
+		return cfgErr("error.upstream_required", "config: upstream is required")
 	}
 	switch c.Policy {
 	case "use", "require", "reject":
 	default:
-		return fmt.Errorf("config: invalid policy %q (use|require|reject)", c.Policy)
+		return cfgErr("error.invalid_policy", "config: invalid policy %q (use|require|reject)", c.Policy)
 	}
 	switch c.UntrustedProxyAction {
 	case "reject", "strip":
 	default:
-		return fmt.Errorf("config: invalid untrusted-proxy-action %q (reject|strip)", c.UntrustedProxyAction)
+		return cfgErr("error.invalid_untrusted_proxy_action", "config: invalid untrusted-proxy-action %q (reject|strip)", c.UntrustedProxyAction)
 	}
 	switch c.Protocol {
 	case "tcp", "udp":
 	default:
-		return fmt.Errorf("config: invalid protocol %q (tcp|udp)", c.Protocol)
+		return cfgErr("error.invalid_protocol", "config: invalid protocol %q (tcp|udp)", c.Protocol)
 	}
 	switch c.UDPHeaderMode {
 	case "every_datagram", "first_datagram":
 	default:
-		return fmt.Errorf("config: invalid udp.header-mode %q (every_datagram|first_datagram)", c.UDPHeaderMode)
+		return cfgErr("error.invalid_udp_header_mode", "config: invalid udp.header-mode %q (every_datagram|first_datagram)", c.UDPHeaderMode)
 	}
 	if c.MaxSessions <= 0 {
-		return fmt.Errorf("config: max-sessions must be > 0, got %d", c.MaxSessions)
+		return cfgErr("error.max_sessions_positive", "config: max-sessions must be > 0, got %d", c.MaxSessions)
 	}
 	if c.MaxDatagramSize < 0 {
-		return fmt.Errorf("config: max-datagram-size must be >= 0 (0=unlimited), got %d", c.MaxDatagramSize)
+		return cfgErr("error.max_datagram_size_nonneg", "config: max-datagram-size must be >= 0 (0=unlimited), got %d", c.MaxDatagramSize)
 	}
 	if c.IdleTimeout <= 0 {
-		return fmt.Errorf("config: idle-timeout must be > 0, got %v", c.IdleTimeout)
+		return cfgErr("error.idle_timeout_positive", "config: idle-timeout must be > 0, got %v", c.IdleTimeout)
 	}
 	switch c.Lang {
 	case "", "en", "zh-CN", "zh-TW":
 	default:
-		return fmt.Errorf("config: invalid lang %q (en|zh-CN|zh-TW, empty=auto)", c.Lang)
+		return cfgErr("error.invalid_lang", "config: invalid lang %q (en|zh-CN|zh-TW, empty=auto)", c.Lang)
 	}
 	for _, cidr := range c.TrustedNetworks {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			if net.ParseIP(cidr) == nil {
-				return fmt.Errorf("config: invalid trusted-networks entry %q: not a valid CIDR or IP address", cidr)
+				return cfgErr("error.invalid_trusted_networks_entry", "config: invalid trusted-networks entry %q: not a valid CIDR or IP address", cidr)
 			}
 		}
 	}
 	if c.DetectTimeout < 0 {
-		return fmt.Errorf("config: detect-timeout must be >= 0 (0=block indefinitely), got %v", c.DetectTimeout)
+		return cfgErr("error.detect_timeout_nonneg", "config: detect-timeout must be >= 0 (0=block indefinitely), got %v", c.DetectTimeout)
 	}
 	if c.TCPIdleTimeout < 0 {
-		return fmt.Errorf("config: tcp.idle-timeout must be >= 0 (0=disabled), got %v", c.TCPIdleTimeout)
+		return cfgErr("error.tcp_idle_timeout_nonneg", "config: tcp.idle-timeout must be >= 0 (0=disabled), got %v", c.TCPIdleTimeout)
 	}
 	if !validLevel(c.LogConsoleLevel) {
-		return fmt.Errorf("config: invalid log console level %q (debug|info|warn|error)", c.LogConsoleLevel)
+		return cfgErr("error.invalid_log_console_level", "config: invalid log console level %q (debug|info|warn|error)", c.LogConsoleLevel)
 	}
 	if !validFormat(c.LogConsoleFormat) {
-		return fmt.Errorf("config: invalid log console format %q (text|json)", c.LogConsoleFormat)
+		return cfgErr("error.invalid_log_console_format", "config: invalid log console format %q (text|json)", c.LogConsoleFormat)
 	}
 	if c.LogFilePath != "" {
 		if !validLevel(c.LogFileLevel) {
-			return fmt.Errorf("config: invalid log file level %q (debug|info|warn|error)", c.LogFileLevel)
+			return cfgErr("error.invalid_log_file_level", "config: invalid log file level %q (debug|info|warn|error)", c.LogFileLevel)
 		}
 		if !validFormat(c.LogFileFormat) {
-			return fmt.Errorf("config: invalid log file format %q (text|json)", c.LogFileFormat)
+			return cfgErr("error.invalid_log_file_format", "config: invalid log file format %q (text|json)", c.LogFileFormat)
 		}
 	}
 	return nil

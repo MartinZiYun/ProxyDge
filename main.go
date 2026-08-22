@@ -58,8 +58,9 @@ func run(args []string) int {
 		fmt.Fprint(out, helpText(args[1:]))
 		return 0
 	default:
-		fmt.Fprintf(os.Stderr, "proxydge: unknown command %q\n", args[0])
-		fmt.Fprintln(os.Stderr, "Run 'proxydge help' for usage.")
+		cat, _ := i18n.Load(i18n.DetectLocale(""))
+		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.unknown_command", args[0]))
+		fmt.Fprintln(os.Stderr, cat.T("error.run_help"))
 		return 2
 	}
 }
@@ -90,7 +91,13 @@ func cmdStart(args []string) int {
 		if errors.Is(err, config.ErrHelp) {
 			return 0
 		}
-		fmt.Fprintln(os.Stderr, err)
+		cat, _ := i18n.Load(i18n.DetectLocale(""))
+		var ce *config.ConfigError
+		if errors.As(err, &ce) {
+			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T(ce.Key, ce.Args...))
+		} else {
+			fmt.Fprintf(os.Stderr, "proxydge: %v\n", err)
+		}
 		return 2
 	}
 
@@ -104,10 +111,10 @@ func cmdStart(args []string) int {
 	cat, _ := i18n.Load(i18n.DetectLocale(cfg.Lang))
 
 	for _, w := range cfg.Warnings() {
-		fmt.Fprintf(os.Stderr, "WARNING: %s\n", cat.T(w.Key, w.Args...))
+		fmt.Fprintf(os.Stderr, "%s: %s\n", cat.T("label.warning"), cat.T(w.Key, w.Args...))
 	}
 	if key, args := cfg.MigrationNotice(); key != "" {
-		fmt.Fprintf(os.Stderr, "NOTICE: %s\n", cat.T(key, args...))
+		fmt.Fprintf(os.Stderr, "%s: %s\n", cat.T("label.notice"), cat.T(key, args...))
 	}
 
 	logger, closeFile, err := buildLogger(cfg)
@@ -200,7 +207,8 @@ func cmdInit(args []string) int {
 	}
 	if !*force {
 		if _, err := os.Stat(path); err == nil {
-			fmt.Fprintf(os.Stderr, "proxydge: init: %s already exists — use -force to overwrite, or run 'proxydge start' to auto-migrate an existing config\n", path)
+			cat, _ := i18n.Load(i18n.DetectLocale(""))
+			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.init_exists", path))
 			return 2
 		}
 	}
@@ -208,7 +216,8 @@ func cmdInit(args []string) int {
 		fmt.Fprintf(os.Stderr, "proxydge: init: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(os.Stderr, "proxydge: wrote sample config to %s\n", path)
+	cat, _ := i18n.Load(i18n.DetectLocale(""))
+	fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.init_wrote", path))
 	return 0
 }
 

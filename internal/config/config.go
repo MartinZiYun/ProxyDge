@@ -244,7 +244,7 @@ func Load(args []string) (*Config, error) {
 // Validate is the single place configuration correctness is checked.
 func (c *Config) Validate() error {
 	if c.Upstream == "" {
-		return errors.New("config: -upstream is required")
+		return errors.New("config: -upstream must not be empty")
 	}
 	switch c.Policy {
 	case "use", "require", "reject":
@@ -656,7 +656,7 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	fmt.Fprintf(&b, "version: %d\n\n", currentConfigVersion)
 
 	writeStrField(&b, "listen", y.Listen, ":9000", "listen address (host:port)")
-	writeStrField(&b, "upstream", y.Upstream, "", "REQUIRED: downstream target host:port, e.g. 127.0.0.1:9001")
+	writeStrField(&b, "upstream", y.Upstream, "127.0.0.1:9001", "downstream target host:port")
 	writeStrField(&b, "policy", y.Policy, "use", "use | require | reject")
 	writeStrField(&b, "lang", y.Lang, "", "display language: en|zh-CN (empty=auto)")
 
@@ -868,7 +868,7 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fs := flag.NewFlagSet("proxydge start", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fv.listen = fs.String("listen", "", "listen address (host:port)")
-	fv.upstream = fs.String("upstream", "", "downstream target host:port (required)")
+	fv.upstream = fs.String("upstream", "", "downstream target host:port (default 127.0.0.1:9001)")
 	fv.policy = fs.String("policy", "", "upstream header policy: use|require|reject")
 	fv.config = fs.String("config", "", "config file path (overrides exe-dir config.yaml)")
 	fv.detectTimeout = fs.Duration("tcp-detect-timeout", 0, "PROXY header detection timeout (TCP)")

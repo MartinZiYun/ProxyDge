@@ -48,16 +48,17 @@ func (p Policy) String() string {
 // Gateway normalizes inbound PROXY headers (v1/v2/direct) to v2 and pipes to a
 // single downstream target.
 type Gateway struct {
-	ln            tcp.Listener
-	dialer        tcp.Dialer
-	reader        proxyproto.Reader
-	writer        proxyproto.Writer
-	policy        Policy
-	upstream      string
-	detectTimeout time.Duration
-	log           *slog.Logger
-	trust         *TrustChecker
-	untrusted     UntrustedAction
+	ln              tcp.Listener
+	dialer          tcp.Dialer
+	reader          proxyproto.Reader
+	writer          proxyproto.Writer
+	policy          Policy
+	upstream        string
+	detectTimeout   time.Duration
+	pipeIdleTimeout time.Duration
+	log             *slog.Logger
+	trust           *TrustChecker
+	untrusted       UntrustedAction
 }
 
 // New constructs a Gateway. The listener, dialer, reader, writer, and logger
@@ -66,22 +67,26 @@ type Gateway struct {
 // byte 'P' or '\r') arrives but no complete signature follows within this
 // duration, the connection is treated as direct. Pass 0 to block indefinitely
 // (only safe when all upstreams are guaranteed to send a complete header or
-// close). logger may be nil (a discarding logger is used).
-func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction) *Gateway {
+// close). pipeIdleTimeout bounds the bidirectional pipe after header detection:
+// if no data flows in a direction for this duration, that side is closed.
+// Pass 0 to disable (pipe blocks indefinitely — DoS risk in untrusted envs).
+// logger may be nil (a discarding logger is used).
+func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout, pipeIdleTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction) *Gateway {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Gateway{
-		ln:            ln,
-		dialer:        dialer,
-		reader:        r,
-		writer:        w,
-		policy:        policy,
-		upstream:      upstream,
-		detectTimeout: detectTimeout,
-		log:           logger,
-		trust:         trust,
-		untrusted:     untrusted,
+		ln:              ln,
+		dialer:          dialer,
+		reader:          r,
+		writer:          w,
+		policy:          policy,
+		upstream:        upstream,
+		detectTimeout:   detectTimeout,
+		pipeIdleTimeout: pipeIdleTimeout,
+		log:             logger,
+		trust:           trust,
+		untrusted:       untrusted,
 	}
 }
 
@@ -178,5 +183,5 @@ func (g *Gateway) handle(c tcp.Conn) {
 
 	// Transport-agnostic: bidirectional pipe with optional half-close.
 	// br carries any application bytes that were peeked during header detection.
-	pipeStream(br, c, up, g.log, c.RemoteAddr())
+	pipeStream(br, c, up, g.log, c.RemoteAddr(), g.pipeIdleTimeout)
 }

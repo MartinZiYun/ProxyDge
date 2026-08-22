@@ -153,7 +153,7 @@ func cmdStart(args []string) int {
 		g := gateway.New(
 			ln, tcp.TCPDialer{},
 			goproxyproto.NewReader(), goproxyproto.NewWriter(),
-			gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, logger,
+			gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, cfg.TCPIdleTimeout, logger,
 			trust, untrustedProxyAction(cfg.UntrustedProxyAction),
 		)
 		errc = make(chan error, 1)

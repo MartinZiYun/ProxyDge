@@ -49,7 +49,7 @@ func startBenchGateway(b *testing.B, upstream string) string {
 		b.Fatalf("gateway listen: %v", err)
 	}
 	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
-		PolicyUse, upstream, 50*time.Millisecond,
+		PolicyUse, upstream, 50*time.Millisecond, 0,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	go func() { _ = g.Serve() }()
 	b.Cleanup(func() { _ = ln.Close() })

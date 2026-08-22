@@ -30,7 +30,8 @@ type Config struct {
 	Upstream             string
 	Policy               string
 	DetectTimeout        time.Duration
-	Lang                 string // display language: "" (auto) | "en" | "zh-CN"
+	TCPIdleTimeout       time.Duration // TCP pipe idle timeout (0=disabled, default 5m)
+	Lang                 string        // display language: "" (auto) | "en" | "zh-CN"
 	TrustedNetworks      []string
 	UntrustedProxyAction string
 	Protocol             string        // "tcp" (default) | "udp"
@@ -101,7 +102,8 @@ var configFields = []configField{
 	{"trusted-networks", "Trust", []string(nil), "only these networks may send PROXY headers", func(c *Config) any { return c.TrustedNetworks }},
 	{"untrusted-proxy-action", "Trust", "reject", "reject (default) | strip", func(c *Config) any { return c.UntrustedProxyAction }},
 	// ── TCP
-	{"tcp.detect-timeout", "TCP", time.Second, "PROXY header detection timeout (stream only)", func(c *Config) any { return c.DetectTimeout }},
+	{"tcp.detect-timeout", "TCP", time.Second, "PROXY header detection timeout (0=block indefinitely)", func(c *Config) any { return c.DetectTimeout }},
+	{"tcp.idle-timeout", "TCP", 5 * time.Minute, "pipe idle timeout, 0=disabled", func(c *Config) any { return c.TCPIdleTimeout }},
 	// ── UDP
 	{"udp.idle-timeout", "UDP", 30 * time.Second, "UDP session idle timeout", func(c *Config) any { return c.IdleTimeout }},
 	{"udp.max-sessions", "UDP", 1024, "max concurrent UDP sessions", func(c *Config) any { return c.MaxSessions }},
@@ -126,6 +128,7 @@ const (
 	fTrustedNetworks      = "trusted-networks"
 	fUntrustedProxyAction = "untrusted-proxy-action"
 	fDetectTimeout        = "tcp.detect-timeout"
+	fTCPIdleTimeout       = "tcp.idle-timeout"
 	fIdleTimeout          = "udp.idle-timeout"
 	fMaxSessions          = "udp.max-sessions"
 	fMaxDatagramSize      = "udp.max-datagram-size"
@@ -305,8 +308,11 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	if c.DetectTimeout <= 0 {
-		return fmt.Errorf("config: detect-timeout must be > 0, got %v", c.DetectTimeout)
+	if c.DetectTimeout < 0 {
+		return fmt.Errorf("config: detect-timeout must be >= 0 (0=block indefinitely), got %v", c.DetectTimeout)
+	}
+	if c.TCPIdleTimeout < 0 {
+		return fmt.Errorf("config: tcp.idle-timeout must be >= 0 (0=disabled), got %v", c.TCPIdleTimeout)
 	}
 	if !validLevel(c.LogConsoleLevel) {
 		return fmt.Errorf("config: invalid log console level %q (debug|info|warn|error)", c.LogConsoleLevel)
@@ -418,7 +424,8 @@ untrusted-proxy-action: "reject"     # reject (default) | strip
 
 # ── TCP (protocol=tcp) ───────────────────────────────────────────────
 tcp:
-  detect-timeout: "1s"               # PROXY header detection timeout (stream only)
+  detect-timeout: "1s"               # PROXY header detection timeout (0=block indefinitely)
+  idle-timeout: "5m"               # pipe idle timeout, 0=disabled
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.
@@ -448,6 +455,7 @@ func (defaultsSource) Apply(c *Config) error {
 	c.Listen = ":9000"
 	c.Policy = "use"
 	c.DetectTimeout = time.Second
+	c.TCPIdleTimeout = 5 * time.Minute
 	c.LogConsoleLevel = "info"
 	c.LogConsoleFormat = "text"
 	c.LogFileLevel = "info"
@@ -493,6 +501,7 @@ type yamlFields struct {
 
 type yamlTCP struct {
 	DetectTimeout *string `yaml:"detect-timeout"`
+	IdleTimeout   *string `yaml:"idle-timeout"`
 }
 
 type yamlUDP struct {
@@ -587,6 +596,14 @@ func (s fileSource) Apply(c *Config) error {
 		}
 		c.DetectTimeout = d
 		c.mark(fDetectTimeout, src)
+	}
+	if y.TCP != nil && y.TCP.IdleTimeout != nil {
+		d, derr := time.ParseDuration(*y.TCP.IdleTimeout)
+		if derr != nil {
+			return fmt.Errorf("parse %s: tcp.idle-timeout %q: %w", s.path, *y.TCP.IdleTimeout, derr)
+		}
+		c.TCPIdleTimeout = d
+		c.mark(fTCPIdleTimeout, src)
 	}
 	if y.Lang != nil {
 		c.Lang = *y.Lang
@@ -719,8 +736,10 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 
 	// ── TCP
 	var detectTimeout *string
+	var tcpIdleTimeout *string
 	if y.TCP != nil {
 		detectTimeout = y.TCP.DetectTimeout
+		tcpIdleTimeout = y.TCP.IdleTimeout
 	}
 	if detectTimeout == nil {
 		if v, ok := raw["detect-timeout"].(string); ok {
@@ -729,7 +748,8 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	}
 	b.WriteString("\n# ── TCP (protocol=tcp) ───────────────────────────────────────────────\n")
 	b.WriteString("tcp:\n")
-	writeStrFieldIndent(&b, "detect-timeout", detectTimeout, "1s", "PROXY header detection timeout (stream only)", "  ")
+	writeStrFieldIndent(&b, "detect-timeout", detectTimeout, "1s", "PROXY header detection timeout (0=block indefinitely)", "  ")
+	writeStrFieldIndent(&b, "idle-timeout", tcpIdleTimeout, "5m", "pipe idle timeout, 0=disabled", "  ")
 
 	// ── UDP
 	var idleTimeout *string
@@ -880,6 +900,14 @@ func (envSource) Apply(c *Config) error {
 		c.DetectTimeout = d
 		c.mark(fDetectTimeout, "env")
 	}
+	if v, ok := os.LookupEnv(envPrefix + "TCP_IDLE_TIMEOUT"); ok && v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("%sTCP_IDLE_TIMEOUT=%q: %w", envPrefix, v, err)
+		}
+		c.TCPIdleTimeout = d
+		c.mark(fTCPIdleTimeout, "env")
+	}
 	if v, ok := os.LookupEnv(envPrefix + "LANG"); ok && v != "" {
 		c.Lang = v
 		c.mark(fLang, "env")
@@ -954,6 +982,7 @@ func (envSource) Apply(c *Config) error {
 type flagValues struct {
 	listen, upstream, policy, config         *string
 	detectTimeout                            *time.Duration
+	tcpIdleTimeout                           *time.Duration
 	lang                                     *string
 	logConsoleLevel, logConsoleFormat        *string
 	logFilePath, logFileLevel, logFileFormat *string
@@ -974,7 +1003,8 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.upstream = fs.String("upstream", "", "downstream target host:port (default 127.0.0.1:9001)")
 	fv.policy = fs.String("policy", "", "upstream header policy: use|require|reject")
 	fv.config = fs.String("config", "", "config file path (overrides exe-dir config.yaml)")
-	fv.detectTimeout = fs.Duration("tcp-detect-timeout", 0, "PROXY header detection timeout (TCP)")
+	fv.detectTimeout = fs.Duration("tcp-detect-timeout", 0, "PROXY header detection timeout (0=block indefinitely)")
+	fv.tcpIdleTimeout = fs.Duration("tcp-idle-timeout", 0, "pipe idle timeout (0=disabled, default 5m)")
 	fv.lang = fs.String("lang", "", "display language: en|zh-CN|zh-TW (default auto)")
 	fv.logConsoleLevel = fs.String("log-console-level", "", "console log level: debug|info|warn|error")
 	fv.logConsoleFormat = fs.String("log-console-format", "", "console log format: text|json")
@@ -1017,6 +1047,10 @@ func (s flagSource) Apply(c *Config) error {
 	if s.set["tcp-detect-timeout"] {
 		c.DetectTimeout = *s.fv.detectTimeout
 		c.mark(fDetectTimeout, "flag")
+	}
+	if s.set["tcp-idle-timeout"] {
+		c.TCPIdleTimeout = *s.fv.tcpIdleTimeout
+		c.mark(fTCPIdleTimeout, "flag")
 	}
 	if s.set["lang"] {
 		c.Lang = *s.fv.lang

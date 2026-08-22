@@ -67,7 +67,7 @@ func startGateway(t *testing.T, policy Policy, upstream string) string {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -87,7 +87,7 @@ func startGatewayTrusted(t *testing.T, policy Policy, upstream string, trustCIDR
 	if err != nil {
 		t.Fatalf("NewTrustChecker: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -535,7 +535,7 @@ func TestServeRetriesTransientAcceptErrors(t *testing.T) {
 	flaky.remainingFailures.Store(2)
 
 	g := New(flaky, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
-		PolicyUse, downAddr, time.Second,
+		PolicyUse, downAddr, time.Second, 0,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	errc := make(chan error, 1)
 	go func() { errc <- g.Serve() }()
@@ -578,4 +578,116 @@ func TestServeRetriesTransientAcceptErrors(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve did not exit after listener close")
 	}
+}
+
+// startContinuousSender starts a downstream that accepts one connection and
+// continuously writes data at 10ms intervals without waiting for input. Used
+// to test that the pipe's idle timer is per-direction: upstream→client traffic
+// must NOT extend the client→upstream idle deadline.
+func startContinuousSender(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		for {
+			if _, err := c.Write([]byte("data\n")); err != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln.Addr().String()
+}
+
+// TestPipeIdleTimeout_ClientIdle tests Bug 4: a client sends 1 byte (direct
+// connection) then hangs forever. The pipe idle timeout must close the
+// connection, releasing the goroutine + fds. Without the timeout, the
+// connection would linger indefinitely (DoS vector when combined with fd
+// exhaustion).
+func TestPipeIdleTimeout_ClientIdle(t *testing.T) {
+	downAddr, _ := startDownstream(t)
+	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("gateway listen: %v", err)
+	}
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+		PolicyUse, downAddr, 50*time.Millisecond, 100*time.Millisecond,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	go func() { _ = g.Serve() }()
+	t.Cleanup(func() { _ = ln.Close() })
+
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	// Send 1 byte that is not 'P' or '\r' → treated as direct connection.
+	if _, err := c.Write([]byte("x")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// The connection must close within 1s (idle timeout is 100ms).
+	c.SetReadDeadline(time.Now().Add(1 * time.Second))
+	buf := make([]byte, 1)
+	if _, err := c.Read(buf); err == nil {
+		t.Fatal("connection should have been closed by idle timeout")
+	}
+}
+
+// TestPipeIdleTimeout_IndependentDirections tests that the idle timer is
+// per-direction: continuous upstream→client traffic must NOT extend the
+// client→upstream idle deadline. The client sends 1 byte (direct connection)
+// then nothing; the downstream continuously sends data. The client→upstream
+// direction must still time out and close the connection, even though
+// upstream→client is active.
+func TestPipeIdleTimeout_IndependentDirections(t *testing.T) {
+	downAddr := startContinuousSender(t)
+	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("gateway listen: %v", err)
+	}
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+		PolicyUse, downAddr, 50*time.Millisecond, 100*time.Millisecond,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	go func() { _ = g.Serve() }()
+	t.Cleanup(func() { _ = ln.Close() })
+
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	// Send 1 byte → direct connection. The gateway dials the continuous
+	// sender, which immediately starts sending data.
+	if _, err := c.Write([]byte("x")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Read at least one batch from upstream→client to prove that direction
+	// was active while client→upstream was idle.
+	c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	received := 0
+	buf := make([]byte, 256)
+	for {
+		n, err := c.Read(buf)
+		if n > 0 {
+			received += n
+		}
+		if err != nil {
+			break
+		}
+	}
+	if received == 0 {
+		t.Fatal("expected to receive data from upstream before idle timeout")
+	}
+	// The connection must have closed (client→upstream timed out) even
+	// though upstream→client was continuously sending data. If the timers
+	// were shared, the connection would stay open and the Read above would
+	// not have returned an error.
 }

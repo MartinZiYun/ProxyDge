@@ -254,6 +254,26 @@ func TestValidateBareIPTrustedNetworks(t *testing.T) {
 	}
 }
 
+func TestValidateDetectTimeoutZero(t *testing.T) {
+	var c Config
+	(defaultsSource{}).Apply(&c)
+	c.Upstream = "1.2.3.4:80"
+	c.DetectTimeout = 0 // 0 = block indefinitely
+	if err := c.Validate(); err != nil {
+		t.Fatalf("detect-timeout=0 should be valid, got: %v", err)
+	}
+}
+
+func TestValidateTCPIdleTimeoutNegative(t *testing.T) {
+	var c Config
+	(defaultsSource{}).Apply(&c)
+	c.Upstream = "1.2.3.4:80"
+	c.TCPIdleTimeout = -1
+	if err := c.Validate(); err == nil {
+		t.Fatal("negative tcp.idle-timeout should fail validation")
+	}
+}
+
 func TestValidateTrustDefaults(t *testing.T) {
 	var c Config
 	if err := (defaultsSource{}).Apply(&c); err != nil {

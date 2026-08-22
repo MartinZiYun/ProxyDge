@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"proxydge/internal/gateway"
+	"proxydge/internal/proxyproto/goproxyproto"
 )
 
 func startBenchDownstream(b *testing.B) string {
@@ -24,7 +26,16 @@ func startBenchDownstream(b *testing.B) string {
 			if err != nil {
 				return
 			}
-			_, _ = pc.WriteToUDP(buf[:n], peer)
+			// Strip the PROXY v2 header the gateway prepends, echo payload
+			// only — mirrors startTestDownstream in gateway_test.go so the
+			// client sees exactly the payload it sent.
+			data := buf[:n]
+			if len(data) >= len(proxyV2Sig) && bytes.Equal(data[:len(proxyV2Sig)], proxyV2Sig) {
+				if _, payload, _, err := goproxyproto.NewDatagramReader().ParseDatagram(data); err == nil {
+					data = payload
+				}
+			}
+			_, _ = pc.WriteToUDP(data, peer)
 		}
 	}()
 	return pc.LocalAddr().String()
@@ -54,7 +65,7 @@ func BenchmarkUDPDatagramThroughput(b *testing.B) {
 	downAddr := startBenchDownstream(b)
 	gwAddr := startBenchGateway(b, downAddr, OutputEveryDatagram)
 
-	payload := []byte("PING1234567890") // 16 bytes
+	payload := []byte("PING1234567890") // 14 bytes
 	pc, err := net.Dial("udp", gwAddr)
 	if err != nil {
 		b.Fatalf("dial: %v", err)

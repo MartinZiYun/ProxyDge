@@ -1,10 +1,17 @@
-[English](README.md) | [简体中文](README.zh-CN.md)
-
-# ProxyDge
-
-A PROXY Protocol normalizing gateway for TCP and UDP.
+<p align="center">
+  <h1 align="center">ProxyDge</h1>
+  <p align="center">A PROXY Protocol normalizing gateway for TCP and UDP.</p>
+</p>
 
 Listens on a port, accepts upstream connections/datagrams (direct / PROXY Protocol v1 / v2), normalizes them all to PROXY Protocol v2, and forwards to a single configurable downstream. The downstream therefore always receives a uniform v2 header — the upstream protocol variant differences are absorbed by this service.
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License">
+  <img src="https://img.shields.io/github/release/MartinZiYun/ProxyDge" alt="Release">
+</p>
+
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 ## Features
 

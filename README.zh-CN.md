@@ -1,10 +1,17 @@
-[English](README.md) | [简体中文](README.zh-CN.md)
-
-# ProxyDge
-
-PROXY Protocol 归一化网关，支持 TCP 和 UDP。
+<p align="center">
+  <h1 align="center">ProxyDge</h1>
+  <p align="center">PROXY Protocol 归一化网关，支持 TCP 和 UDP。</p>
+</p>
 
 监听一个端口，接收上游连接/数据报（直连 / PROXY Protocol v1 / v2），将其全部归一化为 PROXY Protocol v2，并转发给单一可配置的下游。下游因此永远只收到统一的 v2 头，上游协议形态的差异被本服务吸收。
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License">
+  <img src="https://img.shields.io/github/release/MartinZiYun/ProxyDge" alt="Release">
+</p>
+
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 ## 功能
 

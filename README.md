@@ -2,15 +2,18 @@
 
 # ProxyDge
 
-A PROXY Protocol normalizing gateway.
+A PROXY Protocol normalizing gateway for TCP and UDP.
 
-Listens on a single TCP port, accepts upstream connections (direct / PROXY Protocol v1 / v2), normalizes them all to PROXY Protocol v2, and forwards to a single configurable downstream. The downstream therefore always receives a uniform v2 header — the upstream protocol variant differences are absorbed by this service.
+Listens on a port, accepts upstream connections/datagrams (direct / PROXY Protocol v1 / v2), normalizes them all to PROXY Protocol v2, and forwards to a single configurable downstream. The downstream therefore always receives a uniform v2 header — the upstream protocol variant differences are absorbed by this service.
 
 ## Features
 
+- **Dual-protocol**: TCP (byte-stream with half-close) and UDP (datagram with session model) — each with its own dedicated gateway, no shared stream abstraction
 - **Protocol normalization**: direct, PROXY v1, PROXY v2 → uniform PROXY v2 output
-- **Source trust control**: only configured trusted IP networks may send PROXY headers, preventing address spoofing
+- **IPv4/IPv6 dual-stack**: full IPv6 support including link-local zone identifiers for UDP session routing
+- **Source trust control**: only configured trusted IP networks may send PROXY headers, preventing address spoofing. Supports CIDR notation and bare IPs (IPv4/IPv6)
 - **Policy control**: `use` (default, accept all three) / `require` (PROXY header mandatory) / `reject` (no PROXY header allowed)
+- **UDP session management**: per-session connected upstream sockets, idle timeout, max session limit, configurable PROXY header emission mode
 - **Config auto-migration**: automatically upgrades old config files when new fields are added — backs up the original, preserves unknown fields
 - **Multi-language**: `en` (default), `zh-CN` (Simplified Chinese), `zh-TW` (Traditional Chinese)
 - **Single-file deployment**: locale files embedded via `go:embed`, no external dependencies
@@ -28,33 +31,50 @@ Download the binary for your platform from the [Releases](https://github.com/Mar
 # Generate a sample config
 ./proxydge init
 
-# Edit the config file (fill in upstream)
+# Edit the config file
 vi config.yaml
 ```
 
 Sample config file:
 
 ```yaml
-version: 1
+version: 2  # do NOT change; used for auto-migration
 
-listen: ":9000"                    # listen address
-upstream: "127.0.0.1:9001"        # downstream target (required)
-policy: "use"                      # use | require | reject
-detect-timeout: "1s"               # PROXY header detection timeout
-lang: ""                           # display language: en | zh-CN | zh-TW (empty = auto-detect)
+# ── General ───────────────────────────────────────────────────────────
+protocol: "tcp"                      # tcp (default) | udp — selects gateway mode
+listen: ":9000"                      # listen address (host:port)
+upstream: "127.0.0.1:9001"          # downstream target host:port
+policy: "use"                        # use | require | reject
+lang: ""                             # display language: en|zh-CN|zh-TW (empty=auto)
 
-# Source trust control: only these networks may send PROXY headers
-# Empty (default) trusts everyone — configure in production to prevent spoofing
+# Trust control: only these networks may send PROXY headers.
+# Supports CIDR (10.0.0.0/8, 2001:db8::/32) and bare IPs (10.0.0.1, fe80::1).
+# Empty (default) trusts everyone — configure in production to prevent spoofing.
 trusted-networks:
-  - "10.0.0.0/8"
-untrusted-proxy-action: "reject"   # reject (default) | strip (strip header, re-normalize as direct)
+  # - "10.0.0.0/8"
+  # - "2001:db8::/32"
+  # - "10.0.0.1"        # bare IP → /32 (IPv4) or /128 (IPv6)
+untrusted-proxy-action: "reject"     # reject (default) | strip
 
+# ── TCP (protocol=tcp) ───────────────────────────────────────────────
+tcp:
+  detect-timeout: "1s"               # PROXY header detection timeout (stream only)
+
+# ── UDP (protocol=udp) ───────────────────────────────────────────────
+# The following fields are only used when protocol=udp.
+udp:
+  idle-timeout: "30s"               # UDP session idle timeout
+  max-sessions: 1024                # max concurrent UDP sessions
+  max-datagram-size: 65535          # max datagram size, 0=unlimited, oversized=drop
+  header-mode: every_datagram       # every_datagram (default) | first_datagram
+
+# ── Logging ──────────────────────────────────────────────────────────
 log:
-  console:
-    level: "info"                  # debug | info | warn | error
-    format: "text"                 # text | json
-  file:
-    path: ""                       # empty = file logging disabled
+  console:                          # logs to stderr
+    level: "info"                    # debug | info | warn | error
+    format: "text"                   # text | json
+  file:                             # logs to a file (path empty => disabled)
+    path: ""                         # e.g. /var/log/proxydge.log
     level: "info"
     format: "json"
 ```
@@ -84,14 +104,19 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `-protocol <p>` | `tcp` | `tcp` \| `udp` — selects gateway mode |
 | `-listen <addr>` | `:9000` | Listen address |
-| `-upstream <host:port>` | (required) | Downstream target |
+| `-upstream <host:port>` | `127.0.0.1:9001` | Downstream target |
 | `-policy <p>` | `use` | `use` \| `require` \| `reject` |
-| `-detect-timeout <dur>` | `1s` | PROXY header detection timeout |
-| `-trusted-networks <cidrs>` | (empty = trust all) | Trusted networks, comma-separated CIDRs |
+| `-trusted-networks <cidrs>` | (empty = trust all) | Trusted networks, comma-separated CIDRs or bare IPs |
 | `-untrusted-proxy-action <a>` | `reject` | `reject` \| `strip` |
 | `-config <path>` | `<exe-dir>/config.yaml` | Config file path |
 | `-lang <locale>` | auto-detect | `en` \| `zh-CN` \| `zh-TW` |
+| `-tcp-detect-timeout <dur>` | `1s` | PROXY header detection timeout (TCP) |
+| `-udp-idle-timeout <dur>` | `30s` | UDP session idle timeout |
+| `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions |
+| `-udp-max-datagram-size <n>` | `65535` | Max datagram size (0=unlimited) |
+| `-udp-header-mode <m>` | `every_datagram` | `every_datagram` \| `first_datagram` |
 | `-log-console-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `-log-console-format <f>` | `text` | `text` \| `json` |
 | `-log-file <path>` | (empty = disabled) | File log path |
@@ -124,14 +149,20 @@ CLI flags  >  env (PROXYDGE_*)  >  config file  >  defaults
 
 ### Environment Variables
 
-Every CLI flag has a corresponding environment variable (prefix `PROXYDGE_`, uppercase, `-` replaced with `_`):
+Every CLI flag has a corresponding environment variable (prefix `PROXYDGE_`, uppercase, `-` replaced with `_`). Protocol-specific flags use `TCP_`/`UDP_` prefixes:
 
 ```bash
+PROXYDGE_PROTOCOL=udp
 PROXYDGE_UPSTREAM=127.0.0.1:9001
 PROXYDGE_POLICY=require
 PROXYDGE_TRUSTED_NETWORKS=10.0.0.0/8,192.168.0.0/16
 PROXYDGE_UNTRUSTED_PROXY_ACTION=reject
 PROXYDGE_LANG=zh-CN
+PROXYDGE_TCP_DETECT_TIMEOUT=2s
+PROXYDGE_UDP_IDLE_TIMEOUT=60s
+PROXYDGE_UDP_MAX_SESSIONS=2048
+PROXYDGE_UDP_MAX_DATAGRAM_SIZE=1500
+PROXYDGE_UDP_HEADER_MODE=first_datagram
 ```
 
 ### Config File Discovery
@@ -145,13 +176,26 @@ ProxyDge's `Policy` (use/require/reject) controls whether PROXY headers are acce
 
 ### How It Works
 
-1. Detect whether the connection carries a PROXY header
+1. Detect whether the connection/datagram carries a PROXY header
 2. If a header is present and the source IP is **not in a trusted network** → handle per `untrusted-proxy-action`:
-   - `reject` (default): close the connection immediately
-   - `strip`: strip the header, re-normalize using the TCP socket's real peer address as a direct connection
+   - `reject` (default): close the connection / drop the datagram immediately
+   - `strip`: strip the header, re-normalize using the socket's real peer address as a direct connection
 3. Then apply policy as usual
 
-**Security-critical**: The IP used for trust checking **always comes from the TCP socket's `RemoteAddr()`**, never from the source address claimed in the PROXY header. An attacker cannot bypass the check by forging a trusted IP inside the header.
+**Security-critical**: The IP used for trust checking **always comes from the socket's real peer address** (`RemoteAddr()` for TCP, `ReadFromUDP` for UDP), never from the source address claimed in the PROXY header. An attacker cannot bypass the check by forging a trusted IP inside the header.
+
+### Trust Network Configuration
+
+`trusted-networks` accepts both CIDR notation and bare IP addresses:
+
+```yaml
+trusted-networks:
+  - "10.0.0.0/8"           # IPv4 CIDR
+  - "2001:db8::/32"        # IPv6 CIDR
+  - "fe80::/10"            # IPv6 link-local CIDR
+  - "10.0.0.1"             # bare IPv4 → auto-converted to /32
+  - "2001:db8::1"          # bare IPv6 → auto-converted to /128
+```
 
 ### Behavior Matrix
 
@@ -168,7 +212,22 @@ ProxyDge's `Policy` (use/require/reject) controls whether PROXY headers are acce
 - `trusted-networks` empty → warns that all sources are trusted, posing a spoofing risk
 - `untrusted-proxy-action=strip` → warns that untrusted sources can still connect
 
-## Config Auto-Migration
+## UDP Gateway
+
+When `protocol: udp`, ProxyDge runs as a UDP PROXY Protocol gateway with its own datagram/session model:
+
+- **Per-session connected upstream sockets**: each client session gets a dedicated `DialUDP` socket — the OS kernel filters responses by source, no application-level routing table needed
+- **Session lifecycle**: NEW → ACTIVE → EXPIRED (idle timeout). Sessions are keyed by `(sourceIP, sourcePort, IPv6 zone)`
+- **Max session limit**: configurable cap on concurrent sessions (default 1024); new sessions from new sources are dropped when at capacity
+- **PROXY header emission modes** (`udp.header-mode`):
+  - `every_datagram` (default): each datagram carries a PROXY v2 header — downstream is stateless
+  - `first_datagram`: only the first datagram in a session carries a header — lower overhead, requires downstream flow state
+- **Input auto-detection**: the gateway auto-detects whether incoming datagrams carry PROXY headers (direct / first_datagram / every_datagram) — controlled by the `policy` field, no separate input config needed
+- **Malformed = drop**: if a datagram starts with a PROXY v2 signature but fails to parse, it is dropped — never falls back to treating it as payload
+- **Resource ordering**: trust + policy decisions run BEFORE session creation — rejected sources consume zero resources (no socket, no goroutine, no session slot)
+- **IPv6 Zone**: link-local addresses with different zone identifiers (e.g., `fe80::1%eth0` vs `fe80::1%eth1`) are treated as different sessions. Note: the PROXY Protocol v2 wire format does not support zone identifiers — zones are preserved locally for session routing but not transmitted to the downstream.
+
+### Config Auto-Migration
 
 The config file includes a `version` field marking its format version.
 
@@ -217,20 +276,31 @@ Unsupported locales automatically fall back to English. Missing translation keys
 ```
 main.go                                  # composition root: flag parsing, adapter wiring, signal handling
 internal/config/                         # config loading (defaults < file < env < flags)
-internal/gateway/                        # gateway: accept loop + trust check + normalization + bidirectional pipe
-  ├── gateway.go                         # Gateway.Serve + handle + Policy + TrustChecker
+internal/protocol/                       # Protocol enum (tcp/udp) — config/routing label only
+internal/transport/                      # cross-transport interfaces (AddrConn, Conn, CloseWriter, RemoteIP)
+internal/tcp/                            # TCP-specific: Conn (stream + half-close), Listener, Dialer
+internal/udp/                            # UDP-specific: Gateway, Session, SessionManager (datagram model)
+internal/gateway/                        # TCP gateway + shared decision logic
+  ├── gateway.go                         # Gateway.Serve + handle + Policy
+  ├── decide.go                          # Decide() — trust + policy (shared TCP/UDP)
+  ├── pipe.go                            # pipeStream() — TCP bidirectional pipe
   └── trust.go                           # TrustChecker + UntrustedAction
 internal/proxyproto/                     # PROXY Protocol abstraction (interfaces + types)
   └── goproxyproto/                      # go-proxyproto library adapter (library only imported here)
-internal/transport/                      # transport abstraction (Conn/Listener/Dialer interfaces + TCP adapter)
+    ├── reader.go                        # TCP stream reader
+    ├── writer.go                        # TCP stream writer
+    └── datagram.go                      # UDP datagram reader/writer
 internal/i18n/                           # internationalization (go:embed + locale YAML)
   └── locales/                           # en.yaml / zh-CN.yaml / zh-TW.yaml
 internal/version/                        # version info (ldflags injection)
 ```
 
-### Library Isolation
+### Design Principles
 
-Business code does not directly import `github.com/pires/go-proxyproto`. The library is isolated behind the `internal/proxyproto/goproxyproto` adapter subpackage — swapping the library only requires changing that one subpackage.
+- **TCP and UDP have separate models**: UDP does NOT adapt into `io.ReadWriteCloser`/`pipeStream`. TCP is byte-stream with half-close; UDP is message-oriented with session lifecycle.
+- **Shared logic is transport-agnostic**: `Decide()` (trust + policy), `proxyproto.Header`/`Source`, `transport.RemoteIP` are shared. `pipeStream()` and `transport.CloseWriter` are TCP-only.
+- **Library isolation**: business code does not directly import `github.com/pires/go-proxyproto`. The library is isolated behind the `internal/proxyproto/goproxyproto` adapter subpackage.
+- **Security invariants**: trust decisions use the real socket peer address, never the PROXY header's claimed source. Session metadata is deep-copied. Untrusted PROXY metadata is never persisted as session state.
 
 ## Building from Source
 

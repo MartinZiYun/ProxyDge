@@ -580,11 +580,11 @@ func TestServeRetriesTransientAcceptErrors(t *testing.T) {
 	}
 }
 
-// startContinuousSender starts a downstream that accepts one connection and
-// continuously writes data at 10ms intervals without waiting for input. Used
-// to test that the pipe's idle timer is per-direction: upstream→client traffic
-// must NOT extend the client→upstream idle deadline.
-func startContinuousSender(t *testing.T) string {
+// startTimedSender starts a downstream that accepts one connection and writes
+// "data\n" every 10ms for sendFor, then closes. Used to prove per-direction
+// idle semantics: the stream outlives the client→upstream idle timeout, and
+// teardown follows once the sender stops.
+func startTimedSender(t *testing.T, sendFor time.Duration) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -596,7 +596,8 @@ func startContinuousSender(t *testing.T) string {
 			return
 		}
 		defer c.Close()
-		for {
+		deadline := time.Now().Add(sendFor)
+		for time.Now().Before(deadline) {
 			if _, err := c.Write([]byte("data\n")); err != nil {
 				return
 			}
@@ -633,28 +634,38 @@ func TestPipeIdleTimeout_ClientIdle(t *testing.T) {
 	if _, err := c.Write([]byte("x")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// The connection must close within 1s (idle timeout is 100ms).
-	c.SetReadDeadline(time.Now().Add(1 * time.Second))
-	buf := make([]byte, 1)
-	if _, err := c.Read(buf); err == nil {
-		t.Fatal("connection should have been closed by idle timeout")
+	// The connection must be closed by the gateway's idle timeout. The echo
+	// may deliver data before closure, so drain until a terminal error; only
+	// our own read deadline expiring means the gateway failed to close it.
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 4096)
+	for {
+		_, err := c.Read(buf)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatal("connection still open after 2s: gateway idle timeout did not close it")
+		}
+		break // EOF or RST — gateway closed the connection
 	}
 }
 
-// TestPipeIdleTimeout_IndependentDirections tests that the idle timer is
-// per-direction: continuous upstream→client traffic must NOT extend the
-// client→upstream idle deadline. The client sends 1 byte (direct connection)
-// then nothing; the downstream continuously sends data. The client→upstream
-// direction must still time out and close the connection, even though
-// upstream→client is active.
+// TestPipeIdleTimeout_IndependentDirections verifies per-direction idle
+// semantics. The client sends one byte then goes silent (client→upstream idles
+// out at 100ms), while the downstream streams for 350ms — 3.5× the idle
+// timeout. The stream must survive that long (an idle direction only
+// half-closes; it must NOT kill active traffic), and once the upstream goes
+// quiet too, the connection must be reaped instead of lingering forever.
 func TestPipeIdleTimeout_IndependentDirections(t *testing.T) {
-	downAddr := startContinuousSender(t)
+	const idle = 100 * time.Millisecond
+	downAddr := startTimedSender(t, 350*time.Millisecond)
 	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
 	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
-		PolicyUse, downAddr, 50*time.Millisecond, 100*time.Millisecond,
+		PolicyUse, downAddr, 50*time.Millisecond, idle,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
@@ -664,30 +675,31 @@ func TestPipeIdleTimeout_IndependentDirections(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
-	// Send 1 byte → direct connection. The gateway dials the continuous
-	// sender, which immediately starts sending data.
 	if _, err := c.Write([]byte("x")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// Read at least one batch from upstream→client to prove that direction
-	// was active while client→upstream was idle.
-	c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	// Read until terminal state within our own budget. Hitting OUR deadline
+	// means neither side ever closed — a leak. Terminal EOF/RST before that,
+	// with substantial data received across multiple idle periods, proves:
+	// (1) upstream→client stayed alive well past client→upstream's timeout,
+	// (2) the pipe was fully reaped after the upstream went quiet.
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	received := 0
-	buf := make([]byte, 256)
+	buf := make([]byte, 4096)
 	for {
 		n, err := c.Read(buf)
-		if n > 0 {
-			received += n
-		}
+		received += n
 		if err != nil {
-			break
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("connection still open after 2s: idle timeout did not reap a fully-idle pipe")
+			}
+			break // sender stopped + closed → clean teardown
 		}
 	}
-	if received == 0 {
-		t.Fatal("expected to receive data from upstream before idle timeout")
+	// 350ms of 5-byte writes at 10ms ticks ≈ 175 bytes; require enough to be
+	// certain flow spanned several idle windows (i.e. survived dir1's FIN).
+	if received < 100 {
+		t.Fatalf("expected sustained upstream traffic across ≥3 idle periods, got %d bytes", received)
 	}
-	// The connection must have closed (client→upstream timed out) even
-	// though upstream→client was continuously sending data. If the timers
-	// were shared, the connection would stay open and the Read above would
-	// not have returned an error.
 }

@@ -35,21 +35,43 @@ type TrustChecker struct {
 	all  bool // true when no networks configured (trust everyone)
 }
 
-// NewTrustChecker parses CIDR strings into a TrustChecker. An empty slice
-// returns a trust-everyone checker (all=true). Invalid CIDRs return an error.
+// NewTrustChecker parses CIDR strings or bare IP addresses into a TrustChecker.
+// A bare IP (e.g., "10.0.0.1" or "2001:db8::1") is auto-converted to a /32
+// (IPv4) or /128 (IPv6) CIDR. An empty slice returns a trust-everyone checker
+// (all=true). Invalid entries return an error.
 func NewTrustChecker(cidrs []string) (*TrustChecker, error) {
 	if len(cidrs) == 0 {
 		return &TrustChecker{all: true}, nil
 	}
 	nets := make([]*net.IPNet, len(cidrs))
 	for i, cidr := range cidrs {
-		_, n, err := net.ParseCIDR(cidr)
+		n, err := parseCIDROrIP(cidr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid trusted-networks entry %q: %w", cidr, err)
 		}
 		nets[i] = n
 	}
 	return &TrustChecker{nets: nets}, nil
+}
+
+// parseCIDROrIP parses a CIDR string (e.g., "10.0.0.0/8") or a bare IP
+// address (e.g., "10.0.0.1"). A bare IPv4 becomes /32, a bare IPv6 becomes
+// /128.
+func parseCIDROrIP(s string) (*net.IPNet, error) {
+	// Try CIDR first — net.ParseCIDR handles both IPv4 and IPv6 CIDR.
+	_, n, err := net.ParseCIDR(s)
+	if err == nil {
+		return n, nil
+	}
+	// Try bare IP — convert to single-host CIDR.
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return nil, fmt.Errorf("not a valid CIDR or IP address")
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)}, nil
+	}
+	return &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}, nil
 }
 
 // IsTrusted returns true if ip is in any trusted network. A nil checker or

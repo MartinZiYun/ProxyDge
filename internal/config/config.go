@@ -386,10 +386,13 @@ detect-timeout: "1s"     # PROXY header detection timeout
 lang: ""                  # display language: en|zh-CN|zh-TW (empty=auto)
 
 # Trust control: only these networks may send PROXY headers.
+# Supports CIDR (10.0.0.0/8, 2001:db8::/32) and bare IPs (10.0.0.1, fe80::1).
 # Empty (default) trusts everyone — configure in production to prevent spoofing.
 trusted-networks:
   # - "10.0.0.0/8"
   # - "192.168.1.0/24"
+  # - "2001:db8::/32"
+  # - "10.0.0.1"        # bare IP → /32 (IPv4) or /128 (IPv6)
 untrusted-proxy-action: "reject"   # reject (default) | strip
 
 # UDP gateway mode (protocol=udp). Ignored when protocol=tcp.

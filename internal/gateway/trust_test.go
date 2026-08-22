@@ -65,6 +65,83 @@ func TestTrustCheckerIPv4MappedIPv6(t *testing.T) {
 	}
 }
 
+func TestTrustCheckerIPv6CIDR(t *testing.T) {
+	tc, err := NewTrustChecker([]string{"2001:db8::/32"})
+	if err != nil {
+		t.Fatalf("NewTrustChecker: %v", err)
+	}
+	if !tc.IsTrusted(net.ParseIP("2001:db8::1")) {
+		t.Fatal("2001:db8::1 should be trusted in 2001:db8::/32")
+	}
+	if !tc.IsTrusted(net.ParseIP("2001:db8:abcd:ef12::1")) {
+		t.Fatal("2001:db8:abcd:ef12::1 should be trusted in 2001:db8::/32")
+	}
+	if tc.IsTrusted(net.ParseIP("2001:db9::1")) {
+		t.Fatal("2001:db9::1 should NOT be trusted in 2001:db8::/32")
+	}
+	if tc.IsTrusted(net.ParseIP("10.0.0.1")) {
+		t.Fatal("10.0.0.1 should NOT be trusted in 2001:db8::/32")
+	}
+}
+
+func TestTrustCheckerIPv6LinkLocalCIDR(t *testing.T) {
+	tc, err := NewTrustChecker([]string{"fe80::/10"})
+	if err != nil {
+		t.Fatalf("NewTrustChecker: %v", err)
+	}
+	if !tc.IsTrusted(net.ParseIP("fe80::1")) {
+		t.Fatal("fe80::1 should be trusted in fe80::/10")
+	}
+	if !tc.IsTrusted(net.ParseIP("febf::1")) {
+		t.Fatal("febf::1 should be trusted in fe80::/10")
+	}
+	if tc.IsTrusted(net.ParseIP("fec0::1")) {
+		t.Fatal("fec0::1 should NOT be trusted in fe80::/10")
+	}
+}
+
+func TestTrustCheckerBareIPv4(t *testing.T) {
+	tc, err := NewTrustChecker([]string{"10.0.0.1"})
+	if err != nil {
+		t.Fatalf("NewTrustChecker: %v", err)
+	}
+	if !tc.IsTrusted(net.ParseIP("10.0.0.1")) {
+		t.Fatal("10.0.0.1 should be trusted (bare IP = /32)")
+	}
+	if tc.IsTrusted(net.ParseIP("10.0.0.2")) {
+		t.Fatal("10.0.0.2 should NOT be trusted (bare IP is /32, not /24)")
+	}
+}
+
+func TestTrustCheckerBareIPv6(t *testing.T) {
+	tc, err := NewTrustChecker([]string{"2001:db8::1"})
+	if err != nil {
+		t.Fatalf("NewTrustChecker: %v", err)
+	}
+	if !tc.IsTrusted(net.ParseIP("2001:db8::1")) {
+		t.Fatal("2001:db8::1 should be trusted (bare IP = /128)")
+	}
+	if tc.IsTrusted(net.ParseIP("2001:db8::2")) {
+		t.Fatal("2001:db8::2 should NOT be trusted (bare IP is /128)")
+	}
+}
+
+func TestTrustCheckerMixedCIDRAndBareIP(t *testing.T) {
+	tc, err := NewTrustChecker([]string{"10.0.0.0/8", "2001:db8::1", "::ffff:192.168.1.0/120"})
+	if err != nil {
+		t.Fatalf("NewTrustChecker: %v", err)
+	}
+	if !tc.IsTrusted(net.ParseIP("10.1.2.3")) {
+		t.Fatal("10.1.2.3 should match 10.0.0.0/8")
+	}
+	if !tc.IsTrusted(net.ParseIP("2001:db8::1")) {
+		t.Fatal("2001:db8::1 should match bare IP")
+	}
+	if tc.IsTrusted(net.ParseIP("2001:db8::2")) {
+		t.Fatal("2001:db8::2 should NOT match (bare /128)")
+	}
+}
+
 func TestNewTrustCheckerInvalidCIDR(t *testing.T) {
 	_, err := NewTrustChecker([]string{"not-a-cidr"})
 	if err == nil {

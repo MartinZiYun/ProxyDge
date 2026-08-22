@@ -73,7 +73,7 @@ func TestProvenanceFileFieldsAll(t *testing.T) {
 func TestDescribeContainsSources(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "c.yaml")
-	writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\n")
+	writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\n")
 	t.Setenv("PROXYDGE_POLICY", "reject")
 	t.Setenv("PROXYDGE_UNTRUSTED_PROXY_ACTION", "reject")
 	c, err := Load([]string{"-config", p, "-log-file", "/tmp/x.log", "-trusted-networks", "192.168.0.0/16"})

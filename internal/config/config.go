@@ -282,7 +282,9 @@ func (c *Config) Validate() error {
 	}
 	for _, cidr := range c.TrustedNetworks {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fmt.Errorf("config: invalid trusted-networks entry %q: %w", cidr, err)
+			if net.ParseIP(cidr) == nil {
+				return fmt.Errorf("config: invalid trusted-networks entry %q: not a valid CIDR or IP address", cidr)
+			}
 		}
 	}
 	if c.DetectTimeout <= 0 {
@@ -534,6 +536,15 @@ func (s fileSource) Apply(c *Config) error {
 			return fmt.Errorf("migrate %s: write failed: %w", s.path, err)
 		}
 		c.Migrated = true
+		// Re-parse the migrated file so v1→v2 mapped values (e.g. flat
+		// detect-timeout → tcp.detect-timeout) are picked up in-memory.
+		data, err = os.ReadFile(s.path)
+		if err != nil {
+			return fmt.Errorf("re-read %s: %w", s.path, err)
+		}
+		if err := yaml.Unmarshal(data, &y); err != nil {
+			return fmt.Errorf("re-parse %s: %w", s.path, err)
+		}
 	}
 
 	// A file was actually loaded — record it for the startup banner.
@@ -629,7 +640,9 @@ func (s fileSource) Apply(c *Config) error {
 // --- config migration (auto-upgrade old config files) ---
 
 // knownConfigKeys is the set of top-level keys ProxyDge understands. Keys
-// not in this set are preserved verbatim during migration.
+// not in this set are preserved verbatim during migration. v1 flat fields
+// (now nested under tcp:/udp:) are included so migration maps them to v2
+// locations instead of leaving them as unknown fields at the bottom.
 var knownConfigKeys = map[string]bool{
 	"version":                true,
 	"listen":                 true,
@@ -642,25 +655,39 @@ var knownConfigKeys = map[string]bool{
 	"tcp":                    true,
 	"udp":                    true,
 	"log":                    true,
+	// v1 flat fields — now nested; recognized so migration maps them.
+	"detect-timeout":    true, // → tcp.detect-timeout
+	"idle-timeout":      true, // → udp.idle-timeout
+	"max-sessions":      true, // → udp.max-sessions
+	"max-datagram-size": true, // → udp.max-datagram-size
+	"udp-output":        true, // → udp.header-mode (renamed in v2)
+	"header-mode":       true, // → udp.header-mode (if written flat)
 }
 
 // generateMigratedConfig builds a new config.yaml string from the parsed
 // user fields (preserving their values) + defaults for missing fields +
-// comments. Unknown top-level keys from raw are appended verbatim so the
-// migration never silently drops user content.
+// comments. The output mirrors the -init template (sampleConfig) in field
+// order, section headers, and comments. v1 flat fields in raw are mapped
+// to their v2 nested locations. Unknown top-level keys from raw are
+// appended verbatim so the migration never silently drops user content.
 func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	var b strings.Builder
 	b.WriteString("# ProxyDge configuration file.\n")
 	b.WriteString("# Auto-migrated by proxydge.\n")
 	b.WriteString("# Precedence (highest to lowest): CLI flags > env (PROXYDGE_*) > this file > defaults.\n\n")
-	fmt.Fprintf(&b, "version: %d\n\n", currentConfigVersion)
+	fmt.Fprintf(&b, "version: %d  # config format version — do NOT change; used for auto-migration\n\n", currentConfigVersion)
 
+	// ── General
+	b.WriteString("# ── General ───────────────────────────────────────────────────────────\n")
+	writeStrField(&b, "protocol", y.Protocol, "tcp", "tcp (default) | udp — selects gateway mode")
 	writeStrField(&b, "listen", y.Listen, ":9000", "listen address (host:port)")
 	writeStrField(&b, "upstream", y.Upstream, "127.0.0.1:9001", "downstream target host:port")
 	writeStrField(&b, "policy", y.Policy, "use", "use | require | reject")
-	writeStrField(&b, "lang", y.Lang, "", "display language: en|zh-CN (empty=auto)")
+	writeStrField(&b, "lang", y.Lang, "", "display language: en|zh-CN|zh-TW (empty=auto)")
 
+	// ── Trust control
 	b.WriteString("\n# Trust control: only these networks may send PROXY headers.\n")
+	b.WriteString("# Supports CIDR (10.0.0.0/8, 2001:db8::/32) and bare IPs (10.0.0.1, fe80::1).\n")
 	b.WriteString("# Empty (default) trusts everyone — configure in production to prevent spoofing.\n")
 	if len(y.TrustedNetworks) > 0 {
 		b.WriteString("trusted-networks:\n")
@@ -668,18 +695,25 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 			fmt.Fprintf(&b, "  - %q\n", cidr)
 		}
 	} else {
-		b.WriteString("trusted-networks:\n  # - \"10.0.0.0/8\"\n  # - \"192.168.1.0/24\"\n")
+		b.WriteString("trusted-networks:\n  # - \"10.0.0.0/8\"\n  # - \"192.168.1.0/24\"\n  # - \"2001:db8::/32\"\n  # - \"10.0.0.1\"        # bare IP → /32 (IPv4) or /128 (IPv6)\n")
 	}
 	writeStrField(&b, "untrusted-proxy-action", y.UntrustedProxyAction, "reject", "reject (default) | strip")
 
+	// ── TCP
 	var detectTimeout *string
 	if y.TCP != nil {
 		detectTimeout = y.TCP.DetectTimeout
+	}
+	if detectTimeout == nil {
+		if v, ok := raw["detect-timeout"].(string); ok {
+			detectTimeout = &v
+		}
 	}
 	b.WriteString("\n# ── TCP (protocol=tcp) ───────────────────────────────────────────────\n")
 	b.WriteString("tcp:\n")
 	writeStrFieldIndent(&b, "detect-timeout", detectTimeout, "1s", "PROXY header detection timeout (stream only)", "  ")
 
+	// ── UDP
 	var idleTimeout *string
 	var maxSessions *int
 	var maxDatagramSize *int
@@ -690,9 +724,32 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 		maxDatagramSize = y.UDP.MaxDatagramSize
 		headerMode = y.UDP.HeaderMode
 	}
+	// v1 flat field fallbacks: if the nested v2 value is absent, check
+	// whether the old config had the value as a flat top-level key.
+	if idleTimeout == nil {
+		if v, ok := raw["idle-timeout"].(string); ok {
+			idleTimeout = &v
+		}
+	}
+	if maxSessions == nil {
+		if n, ok := rawInt(raw, "max-sessions"); ok {
+			maxSessions = &n
+		}
+	}
+	if maxDatagramSize == nil {
+		if n, ok := rawInt(raw, "max-datagram-size"); ok {
+			maxDatagramSize = &n
+		}
+	}
+	if headerMode == nil {
+		if v, ok := raw["udp-output"].(string); ok { // v1 name
+			headerMode = &v
+		} else if v, ok := raw["header-mode"].(string); ok { // flat v2 name
+			headerMode = &v
+		}
+	}
 	b.WriteString("\n# ── UDP (protocol=udp) ───────────────────────────────────────────────\n")
 	b.WriteString("# The following fields are only used when protocol=udp.\n")
-	writeStrField(&b, "protocol", y.Protocol, "tcp", "tcp (default) | udp — selects gateway mode")
 	b.WriteString("udp:\n")
 	writeStrFieldIndent(&b, "idle-timeout", idleTimeout, "30s", "UDP session idle timeout", "  ")
 	ms := 1024
@@ -707,8 +764,7 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	fmt.Fprintf(&b, "  max-datagram-size: %d  # max datagram size, 0=unlimited, oversized=drop\n", mds)
 	writeStrFieldIndent(&b, "header-mode", headerMode, "every_datagram", "every_datagram (default) | first_datagram", "  ")
 
-	b.WriteString("\nlog:\n")
-	b.WriteString("  console:              # logs to stderr\n")
+	// ── Logging
 	var cl, cf, fl, ff, fp *string
 	if y.Log != nil && y.Log.Console != nil {
 		cl, cf = y.Log.Console.Level, y.Log.Console.Format
@@ -716,12 +772,23 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	if y.Log != nil && y.Log.File != nil {
 		fp, fl, ff = y.Log.File.Path, y.Log.File.Level, y.Log.File.Format
 	}
+	b.WriteString("\n# ── Logging ──────────────────────────────────────────────────────────\n")
+	b.WriteString("log:\n")
+	b.WriteString("  console:  # logs to stderr\n")
 	writeStrFieldIndent(&b, "level", cl, "info", "debug | info | warn | error", "    ")
 	writeStrFieldIndent(&b, "format", cf, "text", "text | json", "    ")
-	b.WriteString("  file:                 # logs to a file (path empty => disabled); v1: no rotation\n")
+	b.WriteString("  file:  # logs to a file (path empty => disabled)\n")
 	writeStrFieldIndent(&b, "path", fp, "", "e.g. /var/log/proxydge.log", "    ")
-	writeStrFieldIndent(&b, "level", fl, "info", "debug | info | warn | error", "    ")
-	writeStrFieldIndent(&b, "format", ff, "json", "text | json", "    ")
+	flVal := "info"
+	if fl != nil {
+		flVal = *fl
+	}
+	ffVal := "json"
+	if ff != nil {
+		ffVal = *ff
+	}
+	fmt.Fprintf(&b, "    level: %q\n", flVal)
+	fmt.Fprintf(&b, "    format: %q\n", ffVal)
 
 	// Preserve unknown top-level fields verbatim.
 	for k, v := range raw {
@@ -748,6 +815,24 @@ func writeStrFieldIndent(b *strings.Builder, name string, val *string, def strin
 		v = *val
 	}
 	fmt.Fprintf(b, "%s%s: %q  # %s\n", indent, name, v, comment)
+}
+
+// rawInt reads an integer from the raw YAML map, handling int and float64
+// types that different YAML parsers may produce.
+func rawInt(raw map[string]any, key string) (int, bool) {
+	v, ok := raw[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
 }
 
 // --- env source ---

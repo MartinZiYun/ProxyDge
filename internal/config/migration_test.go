@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMigrationMissingVersionErrors: a config file without a version field
@@ -129,5 +130,58 @@ func TestMigrationAddsMissingFields(t *testing.T) {
 	}
 	if !strings.Contains(s, "listen") {
 		t.Fatalf("migrated file missing listen:\n%s", s)
+	}
+}
+
+// TestMigrationV1FlatFields: v1 flat fields (detect-timeout, idle-timeout,
+// max-sessions, max-datagram-size, udp-output) are mapped to v2 nested
+// fields — both in the migrated file and in the in-memory Config.
+func TestMigrationV1FlatFields(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\ndetect-timeout: 250ms\nidle-timeout: 60s\nmax-sessions: 256\nmax-datagram-size: 4096\nudp-output: first_datagram\n")
+	var c Config
+	if err := (fileSource{path: p}).Apply(&c); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !c.Migrated {
+		t.Fatal("v1 config should trigger migration")
+	}
+	// In-memory values must reflect the v1 flat field values.
+	if c.DetectTimeout != 250*time.Millisecond {
+		t.Fatalf("detect-timeout: want 250ms, got %v", c.DetectTimeout)
+	}
+	if c.IdleTimeout != 60*time.Second {
+		t.Fatalf("idle-timeout: want 60s, got %v", c.IdleTimeout)
+	}
+	if c.MaxSessions != 256 {
+		t.Fatalf("max-sessions: want 256, got %d", c.MaxSessions)
+	}
+	if c.MaxDatagramSize != 4096 {
+		t.Fatalf("max-datagram-size: want 4096, got %d", c.MaxDatagramSize)
+	}
+	if c.UDPHeaderMode != "first_datagram" {
+		t.Fatalf("header-mode: want first_datagram, got %q", c.UDPHeaderMode)
+	}
+	// Migrated file must have v2 nested fields with the user's values.
+	migrated, _ := os.ReadFile(p)
+	s := string(migrated)
+	for _, want := range []string{
+		`tcp:`,
+		`detect-timeout: "250ms"`,
+		`udp:`,
+		`idle-timeout: "60s"`,
+		`max-sessions: 256`,
+		`max-datagram-size: 4096`,
+		`header-mode: "first_datagram"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("migrated file missing %q:\n%s", want, s)
+		}
+	}
+	// v1 flat fields must NOT appear as unknown fields at the bottom.
+	for _, bad := range []string{"\ndetect-timeout:", "\nidle-timeout:", "\nmax-sessions:", "\nmax-datagram-size:", "\nudp-output:"} {
+		if strings.Contains(s, bad) {
+			t.Fatalf("v1 flat field leaked as unknown:\n%s", s)
+		}
 	}
 }

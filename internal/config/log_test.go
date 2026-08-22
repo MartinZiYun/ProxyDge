@@ -45,7 +45,7 @@ func TestFileSourceLogNested(t *testing.T) {
 func TestFileSourceLogPartialConsoleOnly(t *testing.T) {
 	// Only log.console.level present; console.format and file fields untouched.
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
+	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
 	var c Config
 	c.LogConsoleFormat = "preset-fmt" // absent in file => must survive
 	c.LogFileLevel = "preset-lvl"     // absent => must survive

@@ -54,7 +54,7 @@ func TestFileSourceYAML(t *testing.T) {
 func TestFileSourcePartialOnlySetsPresent(t *testing.T) {
 	// Only upstream present in the file; other fields must be untouched.
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 1\nupstream: 10.0.0.1:5000\n")
+	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 10.0.0.1:5000\n")
 	var c Config
 	c.Listen = "preset"
 	if err := (fileSource{path: p}).Apply(&c); err != nil {
@@ -233,9 +233,24 @@ func TestValidateBadUntrustedProxyAction(t *testing.T) {
 }
 
 func TestValidateBadTrustedNetworkCIDR(t *testing.T) {
-	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "reject", TrustedNetworks: []string{"not-a-cidr"}}
+	var c Config
+	(defaultsSource{}).Apply(&c)
+	c.Upstream = "1.2.3.4:80"
+	c.TrustedNetworks = []string{"not-a-cidr"}
 	if err := c.Validate(); err == nil {
 		t.Fatal("invalid CIDR should fail validation")
+	}
+}
+
+func TestValidateBareIPTrustedNetworks(t *testing.T) {
+	for _, ip := range []string{"192.168.3.80", "10.0.0.1", "::1", "2001:db8::1"} {
+		var c Config
+		(defaultsSource{}).Apply(&c)
+		c.Upstream = "1.2.3.4:80"
+		c.TrustedNetworks = []string{ip}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("bare IP %q should pass validation, got: %v", ip, err)
+		}
 	}
 }
 

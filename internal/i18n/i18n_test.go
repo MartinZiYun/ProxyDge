@@ -1,6 +1,8 @@
 package i18n
 
 import (
+	"reflect"
+	"regexp"
 	"sort"
 	"testing"
 )
@@ -167,6 +169,45 @@ func TestKeysSortedForStableTest(t *testing.T) {
 	keys := en.Keys()
 	if len(keys) == 0 {
 		t.Fatal("no keys in en catalog")
+	}
+}
+
+// fmtVerbSeq extracts the ordered fmt verbs (%q, %d, %v, ...) from s,
+// tolerating flags/width/precision (e.g. %2d, %.3f). Literal %% is ignored.
+var fmtVerbRe = regexp.MustCompile(`%[-+ #0-9.]*([a-zA-Z])`)
+
+func fmtVerbSeq(s string) []string {
+	var out []string
+	for _, m := range fmtVerbRe.FindAllStringSubmatch(s, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// TestVerbConsistency guards translated messages used with args: main.go feeds
+// one shared Args slice to both the English fallback and each locale's
+// template, so every locale must use the same verbs in the same order —
+// otherwise output degrades to "%!q(MISSING)" or "%!(EXTRA ...)".
+func TestVerbConsistency(t *testing.T) {
+	en, _ := Load(LocaleEN)
+	for _, loc := range []Locale{LocaleZhCN, LocaleZhTW} {
+		cat, err := Load(loc)
+		if err != nil {
+			t.Fatalf("Load(%s): %v", loc, err)
+		}
+		for _, k := range en.Keys() {
+			msg, ok := cat.messages[k]
+			if !ok {
+				t.Errorf("%s: missing key %q", loc, k)
+				continue
+			}
+			want := fmtVerbSeq(en.messages[k])
+			got := fmtVerbSeq(msg)
+			if !reflect.DeepEqual(want, got) {
+				t.Errorf("%s: %s verb mismatch\n  en     : %v (%q)\n  %-6s: %v (%q)",
+					loc, k, want, en.messages[k], loc, got, msg)
+			}
+		}
 	}
 }
 

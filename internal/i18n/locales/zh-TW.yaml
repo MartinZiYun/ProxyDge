@@ -25,7 +25,8 @@ help.text: |
     -untrusted-proxy-action <a>     reject|strip (預設 "reject")
     -config <path>                  設定檔路徑
     -lang <locale>                  顯示語言: en|zh-CN|zh-TW (預設自動)
-    -tcp-detect-timeout <dur>       PROXY 標頭探測逾時, 僅 TCP (預設 1s)
+    -tcp-detect-timeout <dur>       PROXY 標頭探測逾時 (0=無限等待, 預設 1s)
+    -tcp-idle-timeout <dur>         管道空閒逾時, 0=停用 (預設 5m)
     -udp-idle-timeout <dur>        UDP session 空閒逾時 (預設 30s)
     -udp-max-sessions <n>          最大並發 UDP session 數 (預設 1024)
     -udp-max-datagram-size <n>     最大資料包大小, 0=無限制 (預設 65535)
@@ -34,7 +35,7 @@ help.text: |
     -log-console-format <f>        text|json (預設 "text")
     -log-file <path>               日誌檔案路徑 (空=停用)
     -log-file-level <l>            debug|info|warn|error (預設 "info")
-    -log-file-format <f>           text|json (預設 "json")
+    -log-file-format <f>           text|json (預設 "text")
 
   init 選項：
     -config <path>                  範例設定寫入位置 (預設: <exe-dir>/config.yaml)

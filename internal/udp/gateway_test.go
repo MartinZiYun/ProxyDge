@@ -853,3 +853,50 @@ func TestIPv6DirectToFirst(t *testing.T) {
 		t.Fatalf("payload2: want %q, got %q", p2, rd2.payload)
 	}
 }
+
+// TestHandleDatagramDropsWhenCreationRaceReturnsExpiredSession simulates the
+// expire() window where done is closed but the stale session is still in the
+// manager map: handleDatagram must drop the datagram instead of using the
+// expired session handed back by Create's LoadOrStore loser path.
+func TestHandleDatagramDropsWhenCreationRaceReturnsExpiredSession(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	g, err := New(
+		"127.0.0.1:0", downAddr,
+		gateway.PolicyUse, nil, gateway.UntrustedReject,
+		OutputEveryDatagram, time.Hour, 1024, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("gateway: %v", err)
+	}
+	t.Cleanup(func() { g.Close() })
+
+	peer := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 54321}
+	key := keyFromUDPAddr(peer)
+
+	down, err := net.ResolveUDPAddr("udp", downAddr)
+	if err != nil {
+		t.Fatalf("resolve downstream: %v", err)
+	}
+	upstream, err := net.DialUDP("udp", nil, down)
+	if err != nil {
+		t.Fatalf("dial upstream: %v", err)
+	}
+	t.Cleanup(func() { _ = upstream.Close() })
+
+	// Stale session: done closed + once consumed = expire() already ran its
+	// body; the map entry simply has not been deleted yet (the race window).
+	stale := newSession(key, peer, g.listener, upstream, time.Hour, g.log, nil)
+	g.manager.sessions.Store(key, stale)
+	close(stale.done)
+	stale.once.Do(func() {})
+
+	// Direct (headerless) datagram from the stale session's peer.
+	g.handleDatagram([]byte("ping"), peer)
+
+	select {
+	case rd := <-recorded:
+		t.Fatalf("datagram forwarded through expired session: %+v", rd)
+	case <-time.After(200 * time.Millisecond):
+	}
+}

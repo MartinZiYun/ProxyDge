@@ -110,7 +110,14 @@ func (s *UDPSession) startReader(wg *sync.WaitGroup) {
 }
 
 // refresh resets the idle timer. Called on each datagram (either direction).
+// A done session must not Reset: on an already-fired timer Reset re-arms it,
+// resurrecting a dead timer whose next fire is a silent no-op.
 func (s *UDPSession) refresh() {
+	select {
+	case <-s.done:
+		return
+	default:
+	}
 	s.idleTimer.Reset(s.idleTimeout)
 }
 

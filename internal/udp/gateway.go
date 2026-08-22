@@ -239,6 +239,14 @@ func (g *UDPGateway) handleDatagram(data []byte, actualPeer *net.UDPAddr) {
 			}
 			return
 		}
+		select {
+		case <-sess.done:
+			// Lost the creation race against a session that has since expired;
+			// its map entry is pending deletion. Drop rather than use it.
+			g.log.Debug("session expired during creation race, dropping", "remote", actualPeer)
+			return
+		default:
+		}
 		// Log session creation at Info (once per session, like TCP's "accept").
 		g.log.Info("accept", "remote", actualPeer, "source", src, "policy", g.policy.String(), "output", g.outputMode.String())
 	} else {

@@ -97,6 +97,91 @@ func BenchmarkUDPDatagramThroughput(b *testing.B) {
 	}
 }
 
+// BenchmarkUDPDatagramThroughput8K is the same round-trip as
+// BenchmarkUDPDatagramThroughput with an 8KB payload — the smallest size where
+// the MB/s figure reflects real bandwidth instead of per-datagram overhead.
+func BenchmarkUDPDatagramThroughput8K(b *testing.B) {
+	downAddr := startBenchDownstream(b)
+	gwAddr := startBenchGateway(b, downAddr, OutputEveryDatagram)
+
+	payload := bytes.Repeat([]byte("P"), 8192)
+	pc, err := net.Dial("udp", gwAddr)
+	if err != nil {
+		b.Fatalf("dial: %v", err)
+	}
+	defer pc.Close()
+	buf := make([]byte, 65535)
+
+	// Warm up — establish session
+	_, _ = pc.Write(payload)
+	pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _ = pc.Read(buf)
+
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := pc.Write(payload); err != nil {
+			b.Fatalf("write: %v", err)
+		}
+		pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, err := pc.Read(buf)
+		if err != nil {
+			b.Fatalf("read: %v", err)
+		}
+		if n != len(payload) {
+			b.Fatalf("echo size: want %d, got %d", len(payload), n)
+		}
+	}
+}
+
+// BenchmarkUDPSessionChurn measures the full per-client-session lifecycle:
+// a fresh source port sends one datagram, the gateway dials upstream and
+// creates a session (connected socket + reader goroutine + idle timer), the
+// echo comes back, the client leaves, and the idle timer reclaims everything.
+// Run BOUNDED (e.g. -benchtime=20000x): live sessions settle around
+// iterations/sec × idleTimeout(100ms); an unbounded run can hit max-sessions,
+// whose silent drops surface as read timeouts below.
+func BenchmarkUDPSessionChurn(b *testing.B) {
+	downAddr := startBenchDownstream(b)
+	g, err := New(
+		"127.0.0.1:0", downAddr,
+		gateway.PolicyUse, nil, gateway.UntrustedReject,
+		OutputEveryDatagram, 100*time.Millisecond, 8192, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		b.Fatalf("gateway: %v", err)
+	}
+	b.Cleanup(func() { g.Close() })
+	go func() { _ = g.Serve() }()
+	time.Sleep(50 * time.Millisecond)
+	gwAddr := g.listener.LocalAddr().String()
+
+	payload := []byte("PING1234567890")
+	buf := make([]byte, 65535)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		pc, err := net.Dial("udp", gwAddr) // fresh ephemeral port = new session key
+		if err != nil {
+			b.Fatalf("dial: %v", err)
+		}
+		if _, err := pc.Write(payload); err != nil {
+			pc.Close()
+			b.Fatalf("write: %v", err)
+		}
+		pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := pc.Read(buf); err != nil {
+			pc.Close()
+			b.Fatalf("read (live sessions may have hit max-sessions — run bounded): %v", err)
+		}
+		pc.Close()
+	}
+}
+
 // BenchmarkUDPDatagramConcurrent measures throughput under concurrent senders.
 func BenchmarkUDPDatagramConcurrent(b *testing.B) {
 	downAddr := startBenchDownstream(b)

@@ -41,15 +41,15 @@ func startBenchDownstream(b *testing.B) string {
 }
 
 // startBenchGateway starts a gateway with PolicyUse (direct connections),
-// 50ms detect timeout, and a discarding logger.
-func startBenchGateway(b *testing.B, upstream string) string {
+// 50ms detect timeout, the given pipe idle timeout, and a discarding logger.
+func startBenchGateway(b *testing.B, upstream string, idleTimeout time.Duration) string {
 	b.Helper()
 	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		b.Fatalf("gateway listen: %v", err)
 	}
 	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
-		PolicyUse, upstream, 50*time.Millisecond, 0,
+		PolicyUse, upstream, 50*time.Millisecond, idleTimeout,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchReject)
 	go func() { _ = g.Serve() }()
 	b.Cleanup(func() { _ = ln.Close() })
@@ -87,7 +87,26 @@ func dialSendReceive(b *testing.B, gwAddr string, payload []byte) {
 // echoes, gateway pipes back. b.SetBytes reports MB/s based on payload size.
 func BenchmarkGatewaySingleConnThroughput(b *testing.B) {
 	downAddr := startBenchDownstream(b)
-	gwAddr := startBenchGateway(b, downAddr)
+	gwAddr := startBenchGateway(b, downAddr, 0)
+
+	payload := bytes.Repeat([]byte("x"), 256*1024)
+	b.SetBytes(int64(len(payload)))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		dialSendReceive(b, gwAddr, payload)
+	}
+}
+
+// BenchmarkGatewaySingleConnThroughputIdleTimeout measures the same pipe as
+// BenchmarkGatewaySingleConnThroughput but with tcp.idle-timeout enabled at
+// its production default (5m): pipeStream wraps each direction's reader in a
+// deadlineReader, adding one SetReadDeadline syscall per Read. This is the
+// number a default-config deployment actually sees.
+func BenchmarkGatewaySingleConnThroughputIdleTimeout(b *testing.B) {
+	downAddr := startBenchDownstream(b)
+	gwAddr := startBenchGateway(b, downAddr, 5*time.Minute)
 
 	payload := bytes.Repeat([]byte("x"), 256*1024)
 	b.SetBytes(int64(len(payload)))
@@ -104,7 +123,7 @@ func BenchmarkGatewaySingleConnThroughput(b *testing.B) {
 // gateway. RunParallel distributes b.N iterations across GOMAXPROCS goroutines.
 func BenchmarkGatewayConcurrentThroughput(b *testing.B) {
 	downAddr := startBenchDownstream(b)
-	gwAddr := startBenchGateway(b, downAddr)
+	gwAddr := startBenchGateway(b, downAddr, 0)
 
 	payload := bytes.Repeat([]byte("x"), 16*1024)
 	b.SetBytes(int64(len(payload)))
@@ -124,7 +143,7 @@ func BenchmarkGatewayConcurrentThroughput(b *testing.B) {
 // round-trip, teardown. Reports ns/op and allocs/op.
 func BenchmarkGatewayLatency(b *testing.B) {
 	downAddr := startBenchDownstream(b)
-	gwAddr := startBenchGateway(b, downAddr)
+	gwAddr := startBenchGateway(b, downAddr, 0)
 
 	payload := []byte("PING")
 	b.ReportAllocs()
@@ -139,7 +158,7 @@ func BenchmarkGatewayLatency(b *testing.B) {
 // Each goroutine does a 4-byte round-trip through the gateway.
 func BenchmarkGatewayConcurrentLatency(b *testing.B) {
 	downAddr := startBenchDownstream(b)
-	gwAddr := startBenchGateway(b, downAddr)
+	gwAddr := startBenchGateway(b, downAddr, 0)
 
 	payload := []byte("PING")
 	b.ReportAllocs()

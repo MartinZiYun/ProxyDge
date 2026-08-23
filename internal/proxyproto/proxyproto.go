@@ -84,7 +84,10 @@ type Reader interface {
 	Read(br *bufio.Reader) (hdr Header, src Source, err error)
 }
 
-// Writer writes a PROXY Protocol v2 header for hdr to w.
+// Writer writes a PROXY Protocol header for hdr to w, in the wire version the
+// implementation was constructed with (see goproxyproto.NewWriter). A zero
+// Header (FamilyUnspec) requests the protocol's address-unknown form:
+// "PROXY UNKNOWN" (v1) or LOCAL+AF_UNSPEC (v2).
 // This is the TCP stream-oriented interface. UDP must use DatagramWriter
 // instead.
 type Writer interface {

@@ -1,7 +1,8 @@
 // Command proxydge is a PROXY Protocol normalizer. It listens on a TCP port,
 // accepts upstream connections that are either direct or carry a PROXY
-// Protocol v1/v2 header, normalizes every connection to a PROXY Protocol v2
-// header, and pipes it to a single configurable downstream.
+// Protocol v1/v2 header, normalizes every connection to a PROXY Protocol
+// header (v1 or v2, per tcp.header-version), and pipes it to a single
+// configurable downstream.
 //
 // Usage: proxydge <command> [options]
 //

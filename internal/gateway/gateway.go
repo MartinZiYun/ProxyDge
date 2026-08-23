@@ -1,7 +1,9 @@
 // Package gateway implements the PROXY-protocol normalizing proxy. It accepts
-// inbound connections (direct, PROXY v1, or PROXY v2), normalizes them all to a
-// PROXY v2 header, dials a single downstream, writes the header, and pipes
-// bytes both ways with TCP half-close. The gateway depends only on the
+// inbound connections (direct, PROXY v1, or PROXY v2), normalizes them all to
+// a PROXY Protocol header in the configured output version (tcp.header-version,
+// v1 or v2), applies the configured mixed-address-family disposition
+// (tcp.family-mismatch), dials a single downstream, writes the header, and
+// pipes bytes both ways with TCP half-close. The gateway depends only on the
 // proxyproto and tcp abstractions — never on the go-proxyproto library
 // or the config/slog-sink wiring directly. It receives a single unified
 // *slog.Logger and is unaware of how many sinks exist.
@@ -236,7 +238,7 @@ func (g *Gateway) handle(c tcp.Conn) {
 	defer up.Close()
 
 	if err := g.writer.WriteTo(up, hdr); err != nil {
-		g.log.Error("write v2 header to downstream", "upstream", g.upstream, "err", err)
+		g.log.Error("write header to downstream", "upstream", g.upstream, "err", err)
 		return
 	}
 

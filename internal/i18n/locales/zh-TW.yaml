@@ -29,6 +29,7 @@ help.text: |
     -tcp-idle-timeout <dur>         管道空閒逾時, 0=停用 (預設 5m)
     -tcp-header-version <v>         下游 PROXY header 版本: v1|v2 (預設 "v2")
     -tcp-family-mismatch <a>        位址族不一致處置: reject|unknown|legacy (預設 "reject")
+    -tcp-max-connections <n>        最大並發連線數, 0=不限制 (預設 4096)
     -udp-idle-timeout <dur>        UDP session 空閒逾時 (預設 30s)
     -udp-max-sessions <n>          最大並發 UDP session 數 (預設 1024)
     -udp-max-datagram-size <n>     最大資料包大小, 0=無限制 (預設 65535)
@@ -73,6 +74,7 @@ error.detect_timeout_nonneg: "設定：detect-timeout 必須大於等於 0（0=�
 error.tcp_idle_timeout_nonneg: "設定：tcp.idle-timeout 必須大於等於 0（0=停用），目前 %v"
 error.invalid_tcp_header_version: "設定：無效的 tcp.header-version %q (v1|v2)"
 error.invalid_family_mismatch: "設定：無效的 tcp.family-mismatch %q (reject|unknown|legacy)"
+error.max_connections_nonneg: "設定：tcp.max-connections 必須大於等於 0（0=不限制），目前 %d"
 error.invalid_log_console_level: "設定：無效的 log console level %q (debug|info|warn|error)"
 error.invalid_log_console_format: "設定：無效的 log console format %q (text|json)"
 error.invalid_log_file_level: "設定：無效的 log file level %q (debug|info|warn|error)"

@@ -29,6 +29,7 @@ help.text: |
     -tcp-idle-timeout <dur>         管道空闲超时, 0=禁用 (默认 5m)
     -tcp-header-version <v>         下游 PROXY header 版本: v1|v2 (默认 "v2")
     -tcp-family-mismatch <a>        地址族不一致处置: reject|unknown|legacy (默认 "reject")
+    -tcp-max-connections <n>        最大并发连接数, 0=不限制 (默认 4096)
     -udp-idle-timeout <dur>        UDP session 空闲超时 (默认 30s)
     -udp-max-sessions <n>          最大并发 UDP session 数 (默认 1024)
     -udp-max-datagram-size <n>     最大数据报大小, 0=无限制 (默认 65535)
@@ -73,6 +74,7 @@ error.detect_timeout_nonneg: "配置：detect-timeout 必须大于等于 0（0=�
 error.tcp_idle_timeout_nonneg: "配置：tcp.idle-timeout 必须大于等于 0（0=禁用），当前 %v"
 error.invalid_tcp_header_version: "配置：无效的 tcp.header-version %q (v1|v2)"
 error.invalid_family_mismatch: "配置：无效的 tcp.family-mismatch %q (reject|unknown|legacy)"
+error.max_connections_nonneg: "配置：tcp.max-connections 必须大于等于 0（0=不限制），当前 %d"
 error.invalid_log_console_level: "配置：无效的 log console level %q (debug|info|warn|error)"
 error.invalid_log_console_format: "配置：无效的 log console format %q (text|json)"
 error.invalid_log_file_level: "配置：无效的 log file level %q (debug|info|warn|error)"

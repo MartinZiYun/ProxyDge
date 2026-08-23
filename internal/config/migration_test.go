@@ -259,7 +259,7 @@ func TestMigrationTCPOrderMatchesSampleTemplate(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	migrated, _ := os.ReadFile(p)
-	fields := []string{"detect-timeout:", "idle-timeout:", "header-version:", "family-mismatch:"}
+	fields := []string{"detect-timeout:", "idle-timeout:", "header-version:", "family-mismatch:", "max-connections:"}
 	orderIn := func(s string) []int {
 		out := make([]int, len(fields))
 		for i, f := range fields {

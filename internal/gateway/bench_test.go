@@ -50,7 +50,7 @@ func startBenchGateway(b *testing.B, upstream string, idleTimeout time.Duration)
 	}
 	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, upstream, 50*time.Millisecond, idleTimeout,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchReject)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchReject, 0)
 	go func() { _ = g.Serve() }()
 	b.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()

@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -98,6 +99,8 @@ type Gateway struct {
 	trust           *TrustChecker
 	untrusted       UntrustedAction
 	mixedFamily     FamilyMismatchAction
+	maxConns        int          // concurrent-connection cap; <=0 disables it
+	active          atomic.Int64 // live connections: incremented at accept, released when handle() returns
 }
 
 // New constructs a Gateway. The listener, dialer, reader, writer, and logger
@@ -110,9 +113,9 @@ type Gateway struct {
 // if no data flows in a direction for this duration, that side is closed.
 // Pass 0 to disable (pipe blocks indefinitely — DoS risk in untrusted envs).
 // mixedFamily selects the disposition for headers whose declared family
-// contradicts their addresses (see FamilyMismatchAction). logger may be nil
+// contradicts their addresses (see FamilyMismatchAction). maxConns caps concurrent connections; <=0 disables the cap. logger may be nil
 // (a discarding logger is used).
-func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout, pipeIdleTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction, mixedFamily FamilyMismatchAction) *Gateway {
+func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout, pipeIdleTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction, mixedFamily FamilyMismatchAction, maxConns int) *Gateway {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -129,6 +132,7 @@ func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.W
 		trust:           trust,
 		untrusted:       untrusted,
 		mixedFamily:     mixedFamily,
+		maxConns:        maxConns,
 	}
 }
 
@@ -149,7 +153,23 @@ func (g *Gateway) Serve() error {
 			}
 			return err
 		}
-		go g.handle(c)
+		// Concurrency cap (tcp.max-connections): counted BEFORE spawning the
+		// handler goroutine so a burst of simultaneous accepts cannot overshoot.
+		// Over limit: close immediately — no header processing, no downstream
+		// dial — symmetric with UDP's per-session ErrMaxSessions drop. A zero or
+		// negative cap disables the check entirely (0=unlimited config value).
+		if g.maxConns > 0 {
+			if n := g.active.Add(1); n > int64(g.maxConns) {
+				g.active.Add(-1)
+				g.log.Warn("connection limit reached, closing", "remote", c.RemoteAddr(), "active", g.active.Load(), "limit", g.maxConns)
+				_ = c.Close()
+				continue
+			}
+		}
+		go func() {
+			defer g.active.Add(-1)
+			g.handle(c)
+		}()
 	}
 }
 

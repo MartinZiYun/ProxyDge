@@ -68,7 +68,7 @@ func startGateway(t *testing.T, policy Policy, upstream string) string {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy, 0)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -88,7 +88,7 @@ func startGatewayTrusted(t *testing.T, policy Policy, upstream string, trustCIDR
 	if err != nil {
 		t.Fatalf("NewTrustChecker: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted, FamilyMismatchLegacy)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted, FamilyMismatchLegacy, 0)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -537,7 +537,7 @@ func TestServeRetriesTransientAcceptErrors(t *testing.T) {
 
 	g := New(flaky, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, time.Second, 0,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy, 0)
 	errc := make(chan error, 1)
 	go func() { errc <- g.Serve() }()
 
@@ -622,7 +622,7 @@ func TestPipeIdleTimeout_ClientIdle(t *testing.T) {
 	}
 	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, 50*time.Millisecond, 100*time.Millisecond,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy, 0)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -667,7 +667,7 @@ func TestPipeIdleTimeout_IndependentDirections(t *testing.T) {
 	}
 	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, 50*time.Millisecond, idle,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy, 0)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -732,7 +732,7 @@ func startGatewayFM(t *testing.T, writerVer byte, fm FamilyMismatchAction, upstr
 	}
 	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(writerVer),
 		PolicyUse, upstream, 50*time.Millisecond, 0,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, fm)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, fm, 0)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -860,5 +860,118 @@ func TestLegacyV1GoldenText(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("downstream saw nothing under legacy/v1")
+	}
+}
+
+// --- tcp.max-connections integration ---
+
+func startGatewayMC(t *testing.T, maxConns int, upstream string) string {
+	t.Helper()
+	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("gateway listen: %v", err)
+	}
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
+		PolicyUse, upstream, 50*time.Millisecond, 0,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy, maxConns)
+	go func() { _ = g.Serve() }()
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln.Addr().String()
+}
+
+// v1HeaderText builds a minimal valid v1 header for the given addresses.
+func v1HeaderText(src, dst string) []byte {
+	return []byte("PROXY TCP4 " + src + " " + dst + " 1234 8080\r\n")
+}
+
+// TestMaxConnectionsClosesOverLimit: with limit=1 the second concurrent
+// connection is closed at accept time — no PROXY processing, no downstream
+// dial — while the first stays fully functional.
+func TestMaxConnectionsClosesOverLimit(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayMC(t, 1, downAddr)
+
+	// A occupies the single slot. Keep its write side open so the pipe stays
+	// active; a settle delay lets Serve() complete the synchronous accept and
+	// counter increment before B arrives.
+	a, err := net.Dial("tcp", gw)
+	if err != nil {
+		t.Fatalf("dial A: %v", err)
+	}
+	defer a.Close()
+	if _, err := a.Write(append(v1HeaderText("192.0.2.1", "198.51.100.1"), []byte("PING")...)); err != nil {
+		t.Fatalf("A write: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// B is over limit: the gateway closes it before reading any header, so
+	// PONG can never reach downstream or be echoed back.
+	b, err := net.Dial("tcp", gw)
+	if err != nil {
+		t.Fatalf("dial B: %v", err)
+	}
+	defer b.Close()
+	_, _ = b.Write(append(v1HeaderText("192.0.2.2", "198.51.100.2"), []byte("PONG")...))
+	_ = b.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 128)
+	n, rerr := b.Read(buf)
+	if n > 0 && bytes.Contains(buf[:n], []byte("PONG")) {
+		t.Fatalf("over-limit connection was served instead of closed: %q", buf[:n])
+	}
+	if n == 0 && rerr == nil {
+		t.Fatal("over-limit connection neither closed nor answered (still open?)")
+	}
+
+	// A survives the cap untouched: half-close unblocks the downstream
+	// ReadAll recorder and the echo returns A's own bytes.
+	_ = a.(*net.TCPConn).CloseWrite()
+	_ = a.SetReadDeadline(time.Now().Add(2 * time.Second))
+	echo, _ := io.ReadAll(a)
+	if !bytes.Contains(echo, []byte("PING")) {
+		t.Fatalf("active connection broken by limit path: %q", echo)
+	}
+	select {
+	case got := <-recorded:
+		if !bytes.Contains(got, []byte("PING")) {
+			t.Fatalf("downstream record unexpected: %x", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("A never recorded downstream")
+	}
+	select {
+	case extra := <-recorded:
+		t.Fatalf("second connection reached downstream under limit=1: %x", extra)
+	default:
+		// expected: exactly one downstream dial happened
+	}
+}
+
+// TestMaxConnectionsZeroUnlimited: 0 disables the cap — two overlapping
+// connections are both served.
+func TestMaxConnectionsZeroUnlimited(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayMC(t, 0, downAddr)
+
+	for i := 0; i < 2; i++ {
+		c, err := net.Dial("tcp", gw)
+		if err != nil {
+			t.Fatalf("client %d: %v", i, err)
+		}
+		_, _ = c.Write(append(v1HeaderText("192.0.2.1", "198.51.100.1"), []byte("GO")...))
+		_ = c.(*net.TCPConn).CloseWrite()
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		echo, _ := io.ReadAll(c)
+		if !bytes.Contains(echo, []byte("GO")) {
+			t.Fatalf("client %d echo missing GO: %q", i, echo)
+		}
+		c.Close()
+	}
+	// Both reached downstream.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-recorded:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only %d of 2 connections recorded downstream", i)
+		}
 	}
 }

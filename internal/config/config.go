@@ -33,6 +33,7 @@ type Config struct {
 	TCPIdleTimeout       time.Duration // TCP pipe idle timeout (0=disabled, default 5m)
 	TCPHeaderVersion     string        // downstream PROXY header version: "v1" | "v2" (default "v2")
 	TCPFamilyMismatch    string        // mixed address-family action: "reject" | "unknown" | "legacy" (default "reject")
+	TCPMaxConnections    int           // max concurrent TCP connections (0=unlimited, default 4096)
 	Lang                 string        // display language: "" (auto) | "en" | "zh-CN"
 	TrustedNetworks      []string
 	UntrustedProxyAction string
@@ -134,6 +135,7 @@ var configFields = []configField{
 	{"tcp.idle-timeout", "TCP", 5 * time.Minute, "pipe idle timeout, 0=disabled", func(c *Config) any { return c.TCPIdleTimeout }},
 	{"tcp.header-version", "TCP", "v2", "downstream PROXY header version: v1|v2", func(c *Config) any { return c.TCPHeaderVersion }},
 	{"tcp.family-mismatch", "TCP", "reject", "mixed address-family action: reject|unknown|legacy", func(c *Config) any { return c.TCPFamilyMismatch }},
+	{"tcp.max-connections", "TCP", 4096, "max concurrent connections, 0=unlimited, over-limit accept closed", func(c *Config) any { return c.TCPMaxConnections }},
 	// ── UDP
 	{"udp.idle-timeout", "UDP", 30 * time.Second, "UDP session idle timeout", func(c *Config) any { return c.IdleTimeout }},
 	{"udp.max-sessions", "UDP", 1024, "max concurrent UDP sessions", func(c *Config) any { return c.MaxSessions }},
@@ -161,6 +163,7 @@ const (
 	fTCPIdleTimeout       = "tcp.idle-timeout"
 	fTCPHeaderVersion     = "tcp.header-version"
 	fTCPFamilyMismatch    = "tcp.family-mismatch"
+	fTCPMaxConnections    = "tcp.max-connections"
 	fIdleTimeout          = "udp.idle-timeout"
 	fMaxSessions          = "udp.max-sessions"
 	fMaxDatagramSize      = "udp.max-datagram-size"
@@ -362,6 +365,9 @@ func (c *Config) Validate() error {
 	default:
 		return cfgErr("error.invalid_family_mismatch", "config: invalid tcp.family-mismatch %q (reject|unknown|legacy)", c.TCPFamilyMismatch)
 	}
+	if c.TCPMaxConnections < 0 {
+		return cfgErr("error.max_connections_nonneg", "config: tcp.max-connections must be >= 0 (0=unlimited), got %d", c.TCPMaxConnections)
+	}
 	if !validLevel(c.LogConsoleLevel) {
 		return cfgErr("error.invalid_log_console_level", "config: invalid log console level %q (debug|info|warn|error)", c.LogConsoleLevel)
 	}
@@ -476,6 +482,7 @@ tcp:
   idle-timeout: "5m"                 # pipe idle timeout, 0=disabled
   header-version: "v2"               # downstream PROXY header version: v1|v2
   family-mismatch: "reject"          # mixed address-family action: reject|unknown|legacy
+  max-connections: 4096              # max concurrent connections, 0=unlimited
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.
@@ -508,6 +515,7 @@ func (defaultsSource) Apply(c *Config) error {
 	c.TCPIdleTimeout = 5 * time.Minute
 	c.TCPHeaderVersion = "v2"
 	c.TCPFamilyMismatch = "reject"
+	c.TCPMaxConnections = 4096
 	c.LogConsoleLevel = "info"
 	c.LogConsoleFormat = "text"
 	c.LogFileLevel = "info"
@@ -556,6 +564,7 @@ type yamlTCP struct {
 	IdleTimeout    *string `yaml:"idle-timeout"`
 	HeaderVersion  *string `yaml:"header-version"`
 	FamilyMismatch *string `yaml:"family-mismatch"`
+	MaxConnections *int    `yaml:"max-connections"`
 }
 
 type yamlUDP struct {
@@ -666,6 +675,10 @@ func (s fileSource) Apply(c *Config) error {
 	if y.TCP != nil && y.TCP.FamilyMismatch != nil {
 		c.TCPFamilyMismatch = *y.TCP.FamilyMismatch
 		c.mark(fTCPFamilyMismatch, src)
+	}
+	if y.TCP != nil && y.TCP.MaxConnections != nil {
+		c.TCPMaxConnections = *y.TCP.MaxConnections
+		c.mark(fTCPMaxConnections, src)
 	}
 	if y.Lang != nil {
 		c.Lang = *y.Lang
@@ -801,11 +814,17 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	var tcpIdleTimeout *string
 	var headerVersion *string
 	var familyMismatch *string
+	// max-connections: template default 4096; an explicit 0 (unlimited) must
+	// survive migration, so the field is copied only when actually present.
+	maxConnections := 4096
 	if y.TCP != nil {
 		detectTimeout = y.TCP.DetectTimeout
 		tcpIdleTimeout = y.TCP.IdleTimeout
 		headerVersion = y.TCP.HeaderVersion
 		familyMismatch = y.TCP.FamilyMismatch
+		if y.TCP.MaxConnections != nil {
+			maxConnections = *y.TCP.MaxConnections
+		}
 	}
 	if detectTimeout == nil {
 		if v, ok := raw["detect-timeout"].(string); ok {
@@ -832,6 +851,7 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	writeStrFieldIndent(&b, "idle-timeout", tcpIdleTimeout, "5m", "pipe idle timeout, 0=disabled", "  ")
 	writeStrFieldIndent(&b, "header-version", headerVersion, "v2", "downstream PROXY header version: v1|v2", "  ")
 	writeStrFieldIndent(&b, "family-mismatch", familyMismatch, "reject", "mixed address-family action: reject|unknown|legacy", "  ")
+	fmt.Fprintf(&b, "  max-connections: %d  # max concurrent connections, 0=unlimited\n", maxConnections)
 
 	// ── UDP
 	var idleTimeout *string
@@ -1074,6 +1094,7 @@ type flagValues struct {
 	detectTimeout                            *time.Duration
 	tcpIdleTimeout                           *time.Duration
 	tcpHeaderVersion, tcpFamilyMismatch      *string
+	tcpMaxConnections                        *int
 	lang                                     *string
 	logConsoleLevel, logConsoleFormat        *string
 	logFilePath, logFileLevel, logFileFormat *string
@@ -1098,6 +1119,7 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.tcpIdleTimeout = fs.Duration("tcp-idle-timeout", 0, "pipe idle timeout (0=disabled, default 5m)")
 	fv.tcpHeaderVersion = fs.String("tcp-header-version", "", "downstream PROXY header version: v1|v2 (default v2)")
 	fv.tcpFamilyMismatch = fs.String("tcp-family-mismatch", "", "mixed address-family action: reject|unknown|legacy (default reject)")
+	fv.tcpMaxConnections = fs.Int("tcp-max-connections", 0, "max concurrent connections (default 4096)")
 	fv.lang = fs.String("lang", "", "display language: en|zh-CN|zh-TW (default auto)")
 	fv.logConsoleLevel = fs.String("log-console-level", "", "console log level: debug|info|warn|error")
 	fv.logConsoleFormat = fs.String("log-console-format", "", "console log format: text|json")

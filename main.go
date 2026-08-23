@@ -163,6 +163,7 @@ func cmdStart(args []string) int {
 			goproxyproto.NewReader(), goproxyproto.NewWriter(tcpHeaderVersion(cfg.TCPHeaderVersion)),
 			gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, cfg.TCPIdleTimeout, logger,
 			trust, untrustedProxyAction(cfg.UntrustedProxyAction), familyMismatch(cfg.TCPFamilyMismatch),
+			cfg.TCPMaxConnections,
 		)
 		errc = make(chan error, 1)
 		go func() { errc <- g.Serve() }()

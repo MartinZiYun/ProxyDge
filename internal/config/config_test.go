@@ -433,3 +433,37 @@ func TestWarningsRejectNoWarning(t *testing.T) {
 		t.Fatalf("default reject: want 0 warnings, got %v", ws)
 	}
 }
+
+// --- tcp.max-connections ---
+
+// TestValidateTCPMaxConnections: negative values are invalid; 0 means
+// unlimited and is accepted; positive values are accepted.
+func TestValidateTCPMaxConnections(t *testing.T) {
+	var c Config
+	(defaultsSource{}).Apply(&c)
+	c.Upstream = "1.2.3.4:80"
+
+	c.TCPMaxConnections = -1
+	err := c.Validate()
+	var ce *ConfigError
+	if !errors.As(err, &ce) || ce.Key != "error.max_connections_nonneg" {
+		t.Fatalf("-1: want error.max_connections_nonneg, got %v", err)
+	}
+
+	for _, n := range []int{0, 1, 4096} {
+		c.TCPMaxConnections = n
+		if err := c.Validate(); err != nil {
+			t.Fatalf("tcp.max-connections=%d should be valid (0=unlimited), got: %v", n, err)
+		}
+	}
+}
+
+func TestDefaultsTCPMaxConnections(t *testing.T) {
+	var c Config
+	if err := (defaultsSource{}).Apply(&c); err != nil {
+		t.Fatalf("defaults: %v", err)
+	}
+	if c.TCPMaxConnections != 4096 {
+		t.Fatalf("default tcp.max-connections: want 4096, got %d", c.TCPMaxConnections)
+	}
+}

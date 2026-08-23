@@ -159,7 +159,7 @@ func cmdStart(args []string) int {
 		}
 		g := gateway.New(
 			ln, tcp.TCPDialer{},
-			goproxyproto.NewReader(), goproxyproto.NewWriter(),
+			goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 			gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, cfg.TCPIdleTimeout, logger,
 			trust, untrustedProxyAction(cfg.UntrustedProxyAction),
 		)

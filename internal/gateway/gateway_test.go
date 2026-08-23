@@ -67,7 +67,7 @@ func startGateway(t *testing.T, policy Policy, upstream string) string {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -87,7 +87,7 @@ func startGatewayTrusted(t *testing.T, policy Policy, upstream string, trustCIDR
 	if err != nil {
 		t.Fatalf("NewTrustChecker: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -534,7 +534,7 @@ func TestServeRetriesTransientAcceptErrors(t *testing.T) {
 	flaky := &flakyListener{Listener: tcpTestListener{ln: ln}}
 	flaky.remainingFailures.Store(2)
 
-	g := New(flaky, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+	g := New(flaky, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, time.Second, 0,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	errc := make(chan error, 1)
@@ -619,7 +619,7 @@ func TestPipeIdleTimeout_ClientIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, 50*time.Millisecond, 100*time.Millisecond,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	go func() { _ = g.Serve() }()
@@ -664,7 +664,7 @@ func TestPipeIdleTimeout_IndependentDirections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, 50*time.Millisecond, idle,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
 	go func() { _ = g.Serve() }()

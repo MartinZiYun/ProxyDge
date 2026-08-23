@@ -39,7 +39,9 @@ func (m *UDPSessionManager) Load(key sessionKey) (*UDPSession, bool) {
 	return v.(*UDPSession), true
 }
 
-// Create creates a new session. Returns ErrMaxSessions if at capacity.
+// Create creates a new session. Returns ErrMaxSessions when a positive
+// maxSessions limit is at capacity; a non-positive limit disables the cap
+// entirely (0=unlimited config value).
 // Uses LoadOrStore for atomic creation — if another goroutine won the race,
 // returns the existing session and rolls back the count.
 func (m *UDPSessionManager) Create(

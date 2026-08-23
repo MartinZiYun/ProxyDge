@@ -127,9 +127,9 @@ proxydge <command> [options]
 | `-lang <locale>` | 自动检测 | `en` \| `zh-CN` \| `zh-TW` |
 | `-tcp-detect-timeout <dur>` | `1s` | PROXY header 检测超时（0=无限等待） |
 | `-tcp-idle-timeout <dur>` | `5m` | 管道空闲超时（0=禁用） |
-| `-tcp-header-version <v>` | `v2` | 下游 PROXY header 版本: `v1` \| `v2` |
-| `-tcp-family-mismatch <a>` | `reject` | 地址族不一致处置: `reject` \| `unknown` \| `legacy` |
-| `-tcp-max-connections <n>` | `4096` | 最大并发连接数,超限 accept 直接关闭;`0`=不限制 |
+| `-tcp-header-version <v>` | `v2` | 下游 PROXY header 版本：`v1` \| `v2` |
+| `-tcp-family-mismatch <a>` | `reject` | 地址族不一致处置：`reject` \| `unknown` \| `legacy` |
+| `-tcp-max-connections <n>` | `4096` | 最大并发连接数，超限 accept 直接关闭；`0`=不限制 |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session 空闲超时 |
 | `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数；`0`=不限制 |
 | `-udp-max-datagram-size <n>` | `65535` | 最大数据报大小 (0=无限制) |

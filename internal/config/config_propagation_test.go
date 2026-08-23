@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -70,5 +72,53 @@ func TestTCPMaxConnectionsEnvInvalid(t *testing.T) {
 	err := (envSource{}).Apply(&Config{})
 	if err == nil || !strings.Contains(err.Error(), "TCP_MAX_CONNECTIONS") {
 		t.Fatalf("invalid env value should error naming the variable, got %v", err)
+	}
+}
+
+// TestTCPFieldsYAMLPropagation: the yamlTCP struct fields are useless without
+// a matching application branch in fileSource.Apply — a missing branch parses
+// cleanly and silently drops the value. Walk a real config file through the
+// file source for all three new TCP fields.
+func TestTCPFieldsYAMLPropagation(t *testing.T) {
+	dir := t.TempDir()
+	body := fmt.Sprintf("version: %d\nupstream: 1.2.3.4:80\ntcp:\n  detect-timeout: 250ms\n  idle-timeout: 90s\n  header-version: v1\n  family-mismatch: unknown\n  max-connections: 100\n", currentConfigVersion)
+	p := writeFile(t, dir, "c.yaml", body)
+
+	var c Config
+	if err := (fileSource{path: p}).Apply(&c); err != nil {
+		t.Fatalf("fileSource: %v", err)
+	}
+	if c.TCPHeaderVersion != "v1" {
+		t.Errorf("yaml header-version not applied: got %q", c.TCPHeaderVersion)
+	}
+	if c.TCPFamilyMismatch != "unknown" {
+		t.Errorf("yaml family-mismatch not applied: got %q", c.TCPFamilyMismatch)
+	}
+	if c.TCPMaxConnections != 100 {
+		t.Errorf("yaml max-connections not applied: got %d", c.TCPMaxConnections)
+	}
+}
+
+// TestMigrationPreservesExplicitZeroTCPMaxConnections: an explicit
+// max-connections: 0 in a migrated config means unlimited and must survive —
+// both in the rewritten file and in memory. The migration generator defaults
+// ABSENT keys to 4096 but must never coerce an explicit 0 into that default.
+func TestMigrationPreservesExplicitZeroTCPMaxConnections(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\ntcp:\n  max-connections: 0\n")
+
+	var c Config
+	if err := (fileSource{path: p}).Apply(&c); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !c.Migrated {
+		t.Fatal("v2 config should trigger migration")
+	}
+	if c.TCPMaxConnections != 0 {
+		t.Fatalf("explicit 0 (unlimited) coerced during migration: got %d", c.TCPMaxConnections)
+	}
+	migrated, _ := os.ReadFile(p)
+	if !strings.Contains(string(migrated), "max-connections: 0") {
+		t.Fatalf("migrated file lost explicit max-connections: 0:\n%s", migrated)
 	}
 }

@@ -45,7 +45,7 @@ func TestFileSourceLogNested(t *testing.T) {
 func TestFileSourceLogPartialConsoleOnly(t *testing.T) {
 	// Only log.console.level present; console.format and file fields untouched.
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
+	p := writeFile(t, dir, "c.yaml", "version: 3\nupstream: 1.2.3.4:80\nlog:\n  console:\n    level: debug\n")
 	var c Config
 	c.LogConsoleFormat = "preset-fmt" // absent in file => must survive
 	c.LogFileLevel = "preset-lvl"     // absent => must survive
@@ -127,7 +127,8 @@ func TestValidateFileLevelOnlyWhenPathSet(t *testing.T) {
 	// file path empty => file level/format not validated even if bogus
 	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second,
 		LogConsoleLevel: "info", LogConsoleFormat: "text", LogFileLevel: "bogus", UntrustedProxyAction: "reject",
-		Protocol: "tcp", IdleTimeout: 30 * time.Second, MaxSessions: 1024, MaxDatagramSize: 65535, UDPHeaderMode: "every_datagram"}
+		Protocol: "tcp", TCPHeaderVersion: "v2", TCPFamilyMismatch: "reject",
+		IdleTimeout: 30 * time.Second, MaxSessions: 1024, MaxDatagramSize: 65535, UDPHeaderMode: "every_datagram"}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("file off + bogus file level should not fail: %v", err)
 	}

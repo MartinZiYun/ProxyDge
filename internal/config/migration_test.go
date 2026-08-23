@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestMigrationFutureVersionErrors(t *testing.T) {
 // no migration — file is untouched, Migrated is false.
 func TestMigrationCurrentVersionNoOp(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\n")
+	p := writeFile(t, dir, "c.yaml", fmt.Sprintf("version: %d\nupstream: 1.2.3.4:80\n", currentConfigVersion))
 	orig, _ := os.ReadFile(p)
 	var c Config
 	if err := (fileSource{path: p}).Apply(&c); err != nil {
@@ -74,8 +75,8 @@ func TestMigrationOldVersion(t *testing.T) {
 	}
 	// File now has current version.
 	migrated, _ := os.ReadFile(p)
-	if !strings.Contains(string(migrated), "version: 2") {
-		t.Fatalf("migrated file missing version: 2:\n%s", migrated)
+	if !strings.Contains(string(migrated), fmt.Sprintf("version: %d", currentConfigVersion)) {
+		t.Fatalf("migrated file missing version: %d:\n%s", currentConfigVersion, migrated)
 	}
 }
 
@@ -182,6 +183,102 @@ func TestMigrationV1FlatFields(t *testing.T) {
 	for _, bad := range []string{"\ndetect-timeout:", "\nidle-timeout:", "\nmax-sessions:", "\nmax-datagram-size:", "\nudp-output:"} {
 		if strings.Contains(s, bad) {
 			t.Fatalf("v1 flat field leaked as unknown:\n%s", s)
+		}
+	}
+}
+
+// TestMigrationV2InjectsLegacyFamilyMismatch: configs written by pre-v3
+// releases (version: 2) predate tcp.family-mismatch entirely — they were
+// served by the historical auto-conversion behavior, where mixed
+// address-family headers were re-encoded as-is (including ::ffff:-mapped
+// IPv4 under AF_INET6). Migration must inject "legacy" explicitly rather
+// than let the fresh-config default ("reject") apply, so upgrading never
+// changes downstream wire behavior silently. The same pass back-fills
+// tcp.idle-timeout (added in v0.3.2 without a version bump, so old files
+// never gained the line) and materializes header-version with its default.
+func TestMigrationV2InjectsLegacyFamilyMismatch(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\n")
+	var c Config
+	if err := (fileSource{path: p}).Apply(&c); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !c.Migrated {
+		t.Fatal("v2 config should trigger migration")
+	}
+	if c.TCPFamilyMismatch != "legacy" {
+		t.Fatalf("migrated family-mismatch: want legacy (historical behavior), got %q", c.TCPFamilyMismatch)
+	}
+	if c.TCPHeaderVersion != "v2" {
+		t.Fatalf("migrated header-version default: want v2, got %q", c.TCPHeaderVersion)
+	}
+	migrated, _ := os.ReadFile(p)
+	s := string(migrated)
+	for _, want := range []string{
+		`family-mismatch: "legacy"`,
+		`header-version: "v2"`,
+		`idle-timeout: "5m"`, // back-filled into pre-v0.3.2-era files
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("migrated file missing %q:\n%s", want, s)
+		}
+	}
+}
+
+// TestMigrationPreservesTCPUserValues: if the user already wrote explicit
+// values for the new fields (or for idle-timeout), migration keeps them —
+// injection only fires for absent keys.
+func TestMigrationPreservesTCPUserValues(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\ntcp:\n  idle-timeout: \"90s\"\n  family-mismatch: \"unknown\"\n")
+	var c Config
+	if err := (fileSource{path: p}).Apply(&c); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if c.TCPFamilyMismatch != "unknown" {
+		t.Fatalf("user family-mismatch not preserved: %q", c.TCPFamilyMismatch)
+	}
+	if c.TCPIdleTimeout != 90*time.Second {
+		t.Fatalf("user idle-timeout not preserved: %v", c.TCPIdleTimeout)
+	}
+	migrated, _ := os.ReadFile(p)
+	s := string(migrated)
+	if !strings.Contains(s, `family-mismatch: "unknown"`) || strings.Contains(s, `"legacy"`) {
+		t.Fatalf("migration must keep the user's value and not inject legacy:\n%s", s)
+	}
+}
+
+// TestMigrationTCPOrderMatchesSampleTemplate: the migrated TCP section must
+// list fields in the same order as the -init sample template, so both paths
+// produce identical layouts and diffs stay readable.
+func TestMigrationTCPOrderMatchesSampleTemplate(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 1.2.3.4:80\n")
+	var c Config
+	if err := (fileSource{path: p}).Apply(&c); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	migrated, _ := os.ReadFile(p)
+	fields := []string{"detect-timeout:", "idle-timeout:", "header-version:", "family-mismatch:"}
+	orderIn := func(s string) []int {
+		out := make([]int, len(fields))
+		for i, f := range fields {
+			out[i] = strings.Index(s, f)
+		}
+		return out
+	}
+	got, want := orderIn(string(migrated)), orderIn(sampleConfig)
+	for i := range fields {
+		if got[i] < 0 {
+			t.Fatalf("migrated file missing %q:\n%s", fields[i], migrated)
+		}
+		if want[i] < 0 {
+			t.Fatalf("sampleConfig missing %q (registry/sample drift)", fields[i])
+		}
+	}
+	for i := 1; i < len(fields); i++ {
+		if (got[i-1] < got[i]) != (want[i-1] < want[i]) {
+			t.Fatalf("TCP field order diverges from sample template at %q:\nmigrated:\n%s", fields[i], migrated)
 		}
 	}
 }

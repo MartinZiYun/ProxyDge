@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,7 +42,7 @@ func TestDefaultsSource(t *testing.T) {
 
 func TestFileSourceYAML(t *testing.T) {
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 2\nlisten: 1.2.3.4:8000\nupstream: 10.0.0.1:5000\npolicy: require\ntcp:\n  detect-timeout: 250ms\n")
+	p := writeFile(t, dir, "c.yaml", "version: 3\nlisten: 1.2.3.4:8000\nupstream: 10.0.0.1:5000\npolicy: require\ntcp:\n  detect-timeout: 250ms\n")
 	var c Config
 	if err := (fileSource{path: p}).Apply(&c); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -54,7 +55,7 @@ func TestFileSourceYAML(t *testing.T) {
 func TestFileSourcePartialOnlySetsPresent(t *testing.T) {
 	// Only upstream present in the file; other fields must be untouched.
 	dir := t.TempDir()
-	p := writeFile(t, dir, "c.yaml", "version: 2\nupstream: 10.0.0.1:5000\n")
+	p := writeFile(t, dir, "c.yaml", "version: 3\nupstream: 10.0.0.1:5000\n")
 	var c Config
 	c.Listen = "preset"
 	if err := (fileSource{path: p}).Apply(&c); err != nil {
@@ -137,7 +138,7 @@ func TestEnvSourceBadDuration(t *testing.T) {
 
 func TestLoadPriorityFlagsOverEnvOverFileOverDefaults(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "c.yaml", "version: 2\nlisten: 1.1.1.1:1000\nupstream: 2.2.2.2:2000\npolicy: require\ntcp:\n  detect-timeout: 100ms\n")
+	writeFile(t, dir, "c.yaml", "version: 3\nlisten: 1.1.1.1:1000\nupstream: 2.2.2.2:2000\npolicy: require\ntcp:\n  detect-timeout: 100ms\n")
 	t.Setenv("PROXYDGE_UPSTREAM", "3.3.3.3:3000") // env beats file
 	t.Setenv("PROXYDGE_POLICY", "reject")         // env beats file
 	// flags beat env on listen + policy
@@ -203,6 +204,8 @@ func TestValidateGood(t *testing.T) {
 		LogConsoleFormat:     "text",
 		UntrustedProxyAction: "reject",
 		Protocol:             "tcp",
+		TCPHeaderVersion:     "v2",
+		TCPFamilyMismatch:    "reject",
 		IdleTimeout:          30 * time.Second,
 		MaxSessions:          1024,
 		MaxDatagramSize:      65535,
@@ -271,6 +274,57 @@ func TestValidateTCPIdleTimeoutNegative(t *testing.T) {
 	c.TCPIdleTimeout = -1
 	if err := c.Validate(); err == nil {
 		t.Fatal("negative tcp.idle-timeout should fail validation")
+	}
+}
+
+// TestValidateBadHeaderVersion / TestValidateBadFamilyMismatch: the two new
+// TCP fields are enums; invalid values must fail with their i18n error keys
+// so main can translate them.
+func TestValidateBadHeaderVersion(t *testing.T) {
+	var c Config
+	(defaultsSource{}).Apply(&c)
+	c.Upstream = "1.2.3.4:80"
+	c.TCPHeaderVersion = "v3"
+	err := c.Validate()
+	var ce *ConfigError
+	if !errors.As(err, &ce) || ce.Key != "error.invalid_tcp_header_version" {
+		t.Fatalf("want error.invalid_tcp_header_version, got %v", err)
+	}
+}
+
+func TestValidateBadFamilyMismatch(t *testing.T) {
+	var c Config
+	(defaultsSource{}).Apply(&c)
+	c.Upstream = "1.2.3.4:80"
+	c.TCPFamilyMismatch = "coerce" // exactly what this field exists to forbid
+	err := c.Validate()
+	var ce *ConfigError
+	if !errors.As(err, &ce) || ce.Key != "error.invalid_family_mismatch" {
+		t.Fatalf("want error.invalid_family_mismatch, got %v", err)
+	}
+}
+
+func TestValidateHeaderVersionValues(t *testing.T) {
+	for _, v := range []string{"v1", "v2"} {
+		var c Config
+		(defaultsSource{}).Apply(&c)
+		c.Upstream = "1.2.3.4:80"
+		c.TCPHeaderVersion = v
+		if err := c.Validate(); err != nil {
+			t.Fatalf("tcp.header-version=%q should be valid, got: %v", v, err)
+		}
+	}
+}
+
+func TestValidateFamilyMismatchValues(t *testing.T) {
+	for _, m := range []string{"reject", "unknown", "legacy"} {
+		var c Config
+		(defaultsSource{}).Apply(&c)
+		c.Upstream = "1.2.3.4:80"
+		c.TCPFamilyMismatch = m
+		if err := c.Validate(); err != nil {
+			t.Fatalf("tcp.family-mismatch=%q should be valid, got: %v", m, err)
+		}
 	}
 }
 
@@ -351,5 +405,31 @@ func TestWarningsNone(t *testing.T) {
 	ws := c.Warnings()
 	if len(ws) != 0 {
 		t.Fatalf("secure config: want 0 warnings, got %d: %v", len(ws), ws)
+	}
+}
+
+// TestWarningsFamilyMismatchLegacy: selecting legacy keeps the historical
+// ::ffff:-mapping behavior, so it must surface a startup warning — but only
+// when the TCP gateway actually runs (protocol=tcp); in udp mode the tcp.*
+// fields are inert and must not warn.
+func TestWarningsFamilyMismatchLegacy(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "reject", TrustedNetworks: []string{"10.0.0.0/8"}, Protocol: "tcp", TCPFamilyMismatch: "legacy"}
+	ws := c.Warnings()
+	if len(ws) != 1 || ws[0].Key != "warning.family_mismatch.legacy" {
+		t.Fatalf("tcp+legacy: want warning.family_mismatch.legacy, got %v", ws)
+	}
+}
+
+func TestWarningsLegacyNotForUDP(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "reject", TrustedNetworks: []string{"10.0.0.0/8"}, Protocol: "udp", TCPFamilyMismatch: "legacy"}
+	if ws := c.Warnings(); len(ws) != 0 {
+		t.Fatalf("udp mode: family-mismatch is inert, want 0 warnings, got %v", ws)
+	}
+}
+
+func TestWarningsRejectNoWarning(t *testing.T) {
+	c := Config{Upstream: "1.2.3.4:80", Policy: "use", DetectTimeout: time.Second, UntrustedProxyAction: "reject", TrustedNetworks: []string{"10.0.0.0/8"}, Protocol: "tcp", TCPFamilyMismatch: "reject"}
+	if ws := c.Warnings(); len(ws) != 0 {
+		t.Fatalf("default reject: want 0 warnings, got %v", ws)
 	}
 }

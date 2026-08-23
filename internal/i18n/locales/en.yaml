@@ -27,6 +27,8 @@ help.text: |
     -lang <locale>                  display language: en|zh-CN|zh-TW (default auto)
     -tcp-detect-timeout <dur>       PROXY header detection timeout (0=block indefinitely, default 1s)
     -tcp-idle-timeout <dur>         pipe idle timeout, 0=disabled (default 5m)
+    -tcp-header-version <v>         downstream PROXY header version: v1|v2 (default "v2")
+    -tcp-family-mismatch <a>        mixed address-family action: reject|unknown|legacy (default "reject")
     -udp-idle-timeout <dur>        UDP session idle timeout (default 30s)
     -udp-max-sessions <n>          max concurrent UDP sessions (default 1024)
     -udp-max-datagram-size <n>     max datagram size, 0=unlimited (default 65535)
@@ -43,6 +45,7 @@ help.text: |
 
 warning.trusted_networks.empty: "trusted-networks is empty: all sources are trusted. Any IP can spoof source addresses via PROXY headers. Configure trusted-networks in production."
 warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip: non-trusted sources with PROXY headers will have their headers stripped and forwarded with real socket addresses. They can still connect — use reject (default) to deny them."
+warning.family_mismatch.legacy: "tcp.family-mismatch=legacy: historical auto-conversion is kept for headers with mismatched address families; downstream may receive ::ffff:-mapped IPv4 addresses labeled as IPv6, which strict consumers can misparse or misroute. Prefer reject or unknown."
 notice.config_migrated: "config file migrated to version %d, backup at %s.bak"
 
 # Labels
@@ -68,6 +71,8 @@ error.invalid_lang: "config: invalid lang %q (en|zh-CN|zh-TW, empty=auto)"
 error.invalid_trusted_networks_entry: "config: invalid trusted-networks entry %q: not a valid CIDR or IP address"
 error.detect_timeout_nonneg: "config: detect-timeout must be >= 0 (0=block indefinitely), got %v"
 error.tcp_idle_timeout_nonneg: "config: tcp.idle-timeout must be >= 0 (0=disabled), got %v"
+error.invalid_tcp_header_version: "config: invalid tcp.header-version %q (v1|v2)"
+error.invalid_family_mismatch: "config: invalid tcp.family-mismatch %q (reject|unknown|legacy)"
 error.invalid_log_console_level: "config: invalid log console level %q (debug|info|warn|error)"
 error.invalid_log_console_format: "config: invalid log console format %q (text|json)"
 error.invalid_log_file_level: "config: invalid log file level %q (debug|info|warn|error)"

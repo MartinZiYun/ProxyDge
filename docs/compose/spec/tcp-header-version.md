@@ -3,7 +3,7 @@ feature: tcp-header-version
 status: delivered
 updated: 2026-08-23
 branch: feat/tcp-header-version
-commits: ffb7199..ffd8b42
+commits: ffb7199..54f1507 # 复审修复含入;文档定稿提交在其前
 ---
 
 # TCP Header Version Selection & Family-Mismatch Policy

@@ -159,9 +159,9 @@ func cmdStart(args []string) int {
 		}
 		g := gateway.New(
 			ln, tcp.TCPDialer{},
-			goproxyproto.NewReader(), goproxyproto.NewWriter(2),
+			goproxyproto.NewReader(), goproxyproto.NewWriter(tcpHeaderVersion(cfg.TCPHeaderVersion)),
 			gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, cfg.TCPIdleTimeout, logger,
-			trust, untrustedProxyAction(cfg.UntrustedProxyAction),
+			trust, untrustedProxyAction(cfg.UntrustedProxyAction), familyMismatch(cfg.TCPFamilyMismatch),
 		)
 		errc = make(chan error, 1)
 		go func() { errc <- g.Serve() }()
@@ -313,6 +313,30 @@ func untrustedProxyAction(s string) gateway.UntrustedAction {
 		return gateway.UntrustedStrip
 	}
 	return gateway.UntrustedReject
+}
+
+// tcpHeaderVersion maps the validated config string to the wire version byte
+// for the downstream writer. It is in main (not the config package) so the
+// gateway and adapter stay free of config imports.
+func tcpHeaderVersion(s string) byte {
+	if s == "v1" {
+		return 1
+	}
+	return 2
+}
+
+// familyMismatch maps the validated config string to the gateway's
+// mixed-address-family disposition enum. Same placement rationale as
+// untrustedProxyAction.
+func familyMismatch(s string) gateway.FamilyMismatchAction {
+	switch s {
+	case "unknown":
+		return gateway.FamilyMismatchUnknown
+	case "legacy":
+		return gateway.FamilyMismatchLegacy
+	default:
+		return gateway.FamilyMismatchReject
+	}
 }
 
 // udpHeaderMode maps the validated config string to the UDP gateway's enum.

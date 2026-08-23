@@ -1018,6 +1018,14 @@ func (envSource) Apply(c *Config) error {
 		c.TCPFamilyMismatch = v
 		c.mark(fTCPFamilyMismatch, "env")
 	}
+	if v, ok := os.LookupEnv(envPrefix + "TCP_MAX_CONNECTIONS"); ok && v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("%sTCP_MAX_CONNECTIONS=%q: %w", envPrefix, v, err)
+		}
+		c.TCPMaxConnections = n
+		c.mark(fTCPMaxConnections, "env")
+	}
 	if v, ok := os.LookupEnv(envPrefix + "LANG"); ok && v != "" {
 		c.Lang = v
 		c.mark(fLang, "env")
@@ -1174,6 +1182,10 @@ func (s flagSource) Apply(c *Config) error {
 	if s.set["tcp-family-mismatch"] {
 		c.TCPFamilyMismatch = *s.fv.tcpFamilyMismatch
 		c.mark(fTCPFamilyMismatch, "flag")
+	}
+	if s.set["tcp-max-connections"] {
+		c.TCPMaxConnections = *s.fv.tcpMaxConnections
+		c.mark(fTCPMaxConnections, "flag")
 	}
 	if s.set["lang"] {
 		c.Lang = *s.fv.lang

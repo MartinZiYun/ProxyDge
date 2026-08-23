@@ -71,6 +71,7 @@ tcp:
   idle-timeout: "5m"               # pipe idle timeout, 0=disabled
   header-version: "v2"               # downstream PROXY header version: v1|v2
   family-mismatch: "reject"          # mixed address-family action: reject|unknown|legacy
+  max-connections: 4096              # max concurrent connections, 0=unlimited
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.
@@ -128,6 +129,7 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 | `-tcp-idle-timeout <dur>` | `5m` | Pipe idle timeout (0=disabled) |
 | `-tcp-header-version <v>` | `v2` | Downstream PROXY header version: `v1` \| `v2` |
 | `-tcp-family-mismatch <a>` | `reject` | Mixed address-family action: `reject` \| `unknown` \| `legacy` |
+| `-tcp-max-connections <n>` | `4096` | Max concurrent connections, over-limit accept closed; `0` = unlimited |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session idle timeout |
 | `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions |
 | `-udp-max-datagram-size <n>` | `65535` | Max datagram size (0=unlimited) |
@@ -176,6 +178,7 @@ PROXYDGE_LANG=zh-CN
 PROXYDGE_TCP_DETECT_TIMEOUT=2s
 PROXYDGE_TCP_HEADER_VERSION=v1
 PROXYDGE_TCP_FAMILY_MISMATCH=unknown
+PROXYDGE_TCP_MAX_CONNECTIONS=2048
 PROXYDGE_UDP_IDLE_TIMEOUT=60s
 PROXYDGE_UDP_MAX_SESSIONS=2048
 PROXYDGE_UDP_MAX_DATAGRAM_SIZE=1500

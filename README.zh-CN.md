@@ -71,6 +71,7 @@ tcp:
   idle-timeout: "5m"               # 管道空闲超时，0=禁用
   header-version: "v2"               # 下游 PROXY header 版本: v1|v2
   family-mismatch: "reject"          # 地址族不一致处置: reject|unknown|legacy
+  max-connections: 4096              # 最大并发连接数, 0=不限制
 
 # ── UDP (protocol=udp) ─────────────────────────────────────────────
 # 以下字段仅在 protocol=udp 时生效
@@ -128,6 +129,7 @@ proxydge <command> [options]
 | `-tcp-idle-timeout <dur>` | `5m` | 管道空闲超时（0=禁用） |
 | `-tcp-header-version <v>` | `v2` | 下游 PROXY header 版本: `v1` \| `v2` |
 | `-tcp-family-mismatch <a>` | `reject` | 地址族不一致处置: `reject` \| `unknown` \| `legacy` |
+| `-tcp-max-connections <n>` | `4096` | 最大并发连接数,超限 accept 直接关闭;`0`=不限制 |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session 空闲超时 |
 | `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数 |
 | `-udp-max-datagram-size <n>` | `65535` | 最大数据报大小 (0=无限制) |
@@ -176,6 +178,7 @@ PROXYDGE_LANG=zh-CN
 PROXYDGE_TCP_DETECT_TIMEOUT=2s
 PROXYDGE_TCP_HEADER_VERSION=v1
 PROXYDGE_TCP_FAMILY_MISMATCH=unknown
+PROXYDGE_TCP_MAX_CONNECTIONS=2048
 PROXYDGE_UDP_IDLE_TIMEOUT=60s
 PROXYDGE_UDP_MAX_SESSIONS=2048
 PROXYDGE_UDP_MAX_DATAGRAM_SIZE=1500

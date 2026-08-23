@@ -3,7 +3,7 @@
   <p align="center">PROXY Protocol 归一化网关，支持 TCP 和 UDP。</p>
 </p>
 
-监听一个端口，接收上游连接/数据报（直连 / PROXY Protocol v1 / v2），将其全部归一化为 PROXY Protocol v2，并转发给单一可配置的下游。下游因此永远只收到统一的 v2 头，上游协议形态的差异被本服务吸收。
+监听一个端口，接收上游连接/数据报（直连 / PROXY Protocol v1 / v2），将其统一归一化为可配置的 PROXY Protocol 版本，并转发给下游。上游协议形态的差异被本服务吸收。
 
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go">
@@ -16,7 +16,7 @@
 ## 功能
 
 - **双协议**：TCP（字节流 + 半关闭）和 UDP（数据报 + session 模型）——各有独立网关，不共享流抽象
-- **协议归一化**：直连、PROXY v1、PROXY v2 → 统一输出 PROXY v2
+- **协议归一化**：直连、PROXY v1、PROXY v2 → 统一输出所选版本（`tcp.header-version`），并对自相矛盾的混合地址族头提供显式处置策略
 - **IPv4/IPv6 双栈**：完整 IPv6 支持，包括 link-local zone 标识符用于 UDP session 路由
 - **来源信任控制**：只有配置的可信 IP 网段才能发送 PROXY header，防止地址伪造。支持 CIDR 和裸 IP（IPv4/IPv6）
 - **策略控制**：`use`（默认，三种都收）/ `require`（必须带 PROXY 头）/ `reject`（禁止带 PROXY 头）
@@ -47,7 +47,7 @@ vi config.yaml
 示例配置文件：
 
 ```yaml
-version: 2  # 不要更改；用于自动迁移
+version: 3  # 不要更改；用于自动迁移
 
 # ── 通用 ───────────────────────────────────────────────────────────
 protocol: "tcp"                      # tcp（默认）| udp — 选择网关模式
@@ -69,6 +69,8 @@ untrusted-proxy-action: "reject"     # reject（默认）| strip
 tcp:
   detect-timeout: "1s"               # PROXY header 检测超时（0=无限等待）
   idle-timeout: "5m"               # 管道空闲超时，0=禁用
+  header-version: "v2"               # 下游 PROXY header 版本: v1|v2
+  family-mismatch: "reject"          # 地址族不一致处置: reject|unknown|legacy
 
 # ── UDP (protocol=udp) ─────────────────────────────────────────────
 # 以下字段仅在 protocol=udp 时生效
@@ -124,6 +126,8 @@ proxydge <command> [options]
 | `-lang <locale>` | 自动检测 | `en` \| `zh-CN` \| `zh-TW` |
 | `-tcp-detect-timeout <dur>` | `1s` | PROXY header 检测超时（0=无限等待） |
 | `-tcp-idle-timeout <dur>` | `5m` | 管道空闲超时（0=禁用） |
+| `-tcp-header-version <v>` | `v2` | 下游 PROXY header 版本: `v1` \| `v2` |
+| `-tcp-family-mismatch <a>` | `reject` | 地址族不一致处置: `reject` \| `unknown` \| `legacy` |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session 空闲超时 |
 | `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数 |
 | `-udp-max-datagram-size <n>` | `65535` | 最大数据报大小 (0=无限制) |
@@ -170,6 +174,8 @@ PROXYDGE_TRUSTED_NETWORKS=10.0.0.0/8,192.168.0.0/16
 PROXYDGE_UNTRUSTED_PROXY_ACTION=reject
 PROXYDGE_LANG=zh-CN
 PROXYDGE_TCP_DETECT_TIMEOUT=2s
+PROXYDGE_TCP_HEADER_VERSION=v1
+PROXYDGE_TCP_FAMILY_MISMATCH=unknown
 PROXYDGE_UDP_IDLE_TIMEOUT=60s
 PROXYDGE_UDP_MAX_SESSIONS=2048
 PROXYDGE_UDP_MAX_DATAGRAM_SIZE=1500
@@ -222,6 +228,30 @@ trusted-networks:
 
 - `trusted-networks` 为空 → 警告所有来源都被信任，存在伪造风险
 - `untrusted-proxy-action=strip` → 警告不可信来源仍可连接
+- `tcp.family-mismatch=legacy` → 警告对不一致头沿用历史自动转换（下游可能收到标记为 IPv6 的 `::ffff:` 映射 IPv4 地址）
+
+## TCP 输出版本与地址族不一致处置
+
+### `tcp.header-version` — 归一目标版本
+
+ProxyDge 上游接受直连与 PROXY v1/v2 header,然后把每条连接统一重编码为**一个版本**发给下游:
+
+- `v2`（默认）：二进制 header — 地址族覆盖完整,可扩展
+- `v1`：文本 header（`PROXY TCP4 ...` / `PROXY TCP6 ...`）— 供只认旧文本格式的下游服务使用
+
+v1 固有限制：无 TLV 扩展能力;源/目的地址族混合时无法忠实表达。
+
+### `tcp.family-mismatch` — header 自相矛盾时怎么办
+
+PROXY header 用一个地址族字段同时描述源和目的。伪造或出 bug 的上游可以发出"声明 INET6、目的却是 `::ffff:` 映射形式 IPv4"的 header。静默重编码会强转地址——下游可能把 `::ffff:192.168.1.1` 当成真实 IPv6 目标去连接,导致失败或误连。ProxyDge 绝不伪造地址,由你选择处置方式:
+
+| 取值 | 行为 |
+|------|------|
+| `reject`（默认） | 拨号下游之前直接关闭连接并记日志 |
+| `unknown` | 转发无地址 header——v1 输出为 `PROXY UNKNOWN`,v2 输出为 LOCAL+AF_UNSPEC——按协议告知下游走兜底逻辑 |
+| `legacy` | 完全跳过检测,逐字节保持历史行为(含静默 `::ffff:` 映射)。选择后启动时打印 WARNING |
+
+检测作用于 trust/policy 处理后的**最终 header**:直连和被 strip 的不可信头都由真实套接字地址重建,天然自洽,永不误伤。
 
 ## UDP 网关
 

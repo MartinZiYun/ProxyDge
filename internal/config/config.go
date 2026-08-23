@@ -451,7 +451,7 @@ const sampleConfig = `# ProxyDge configuration file.
 #
 # Precedence (highest to lowest): CLI flags > env (PROXYDGE_*) > this file > defaults.
 
-version: 2  # config format version — do NOT change; used for auto-migration
+version: 3  # config format version — do NOT change; used for auto-migration
 
 # ── General ───────────────────────────────────────────────────────────
 protocol: "tcp"                      # tcp (default) | udp — selects gateway mode

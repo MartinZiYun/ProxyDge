@@ -61,7 +61,10 @@ FamilyTCP6 命中(一致)当且仅当:
     && h.SrcIP.To4() == nil && h.DstIP.To4() == nil
     && h.SrcIP.To16() != nil && h.DstIP.To16() != nil
 
-其他 Family(Unspec 等)或上述条件不满足 ⇒ 不一致
+FamilyUnspec ⇒ 一致(不声明任何族,无可反驳;writer 对其已有 UNKNOWN/LOCAL
+    诚实落点。今日不可达:stream reader 对非 TCP 头直接报错,direct/strip
+    头由套接字重建必为 TCP4/TCP6)
+其余族(UDP 族等,不会到达 TCP 路径)⇒ 不一致
 ```
 
 nil 必须显式排除:`nil.To4() == nil`,否则 `FamilyTCP6 + nil + nil` 会假满足"两侧均不可转"分支——这正是 nil 目的形态(v4 源+v6 目的经 reader 归一后 DstIP=nil)必须被抓住的原因,契约不依赖调用方保证非 nil。
@@ -117,7 +120,7 @@ untrusted strip 后的头由套接字重建、direct 连接两端同族(OS 保�
 
 - 新增 key ×3(error.invalid_tcp_header_version、error.invalid_family_mismatch、warning.family_mismatch.legacy),en/zh-CN/zh-TW 同步;`TestKeyConsistency`/`TestVerbConsistency` 守护。
 - `help.text` 三语言各加两行 `-tcp-header-version`、`-tcp-family-mismatch`(插在 `-tcp-idle-timeout` 之后)。
-- README.md / README.zh-CN.md:文档化两字段;family-mismatch 说明三值语义、默认 reject、迁移注记(老配置自动置 legacy)、混合族欺骗背景。
+- README.md / README.zh-CN.md:文档化两字段;family-mismatch 说明三值语义、默认 reject、混合族欺骗背景。迁移升级说明不放 README(用户决定),统一写入 release-notes/v0.4.0.md。
 
 ## [S3] Out of Scope
 
@@ -134,5 +137,5 @@ untrusted strip 后的头由套接字重建、direct 连接两端同族(OS 保�
 - [x] T2: goproxyproto writer 参数化(NewWriter(version byte))+ FamilyUnspec 编码(v1→PROXY UNKNOWN,v2→LOCAL+UNSPEC)— acceptance: 单测断言 v1 文本头/v2 二进制签名/UNKNOWN 短格式;**v2 LOCAL 帧断言完整 wire 字节**:sig + ver/cmd=0x20(LOCAL) + fam/proto=0x00(UNSPEC) + length=0x0000,共 **16 字节**(sig12+ver/cmd1+fam/proto1+len2);混合族(TCP4 头+v6 目的)v1/v2 均返回 ErrInvalidAddress;`go test ./internal/proxyproto/...` 通过 (covers: S2; depends: 无,可与 T1 并行)
 - [x] T3: proxyproto.FamilyMatchesAddrs 谓词(实现带注释说明"每个地址分别是否满足 header 宣称族"的判定语义与 nil 契约)+ gateway 集成(New 增参、post-Decide 检测、reject 关连接日志、unknown 重写为 Unspec 头)— acceptance: 谓词单测覆盖四族形态**含 nil 形态**(`FamilyTCP6+nil+nil` 不得假满足、`FamilyTCP4+DstIP=nil` 必须判不一致);**unknown 断言走完整链路**——mixed 入站经 gateway(family-mismatch=unknown)→writer→最终 wire 为 UNKNOWN/LOCAL 帧,而非仅单测 writer 的 Unspec 编码能力;gateway 测试断言 reject 断链;legacy 双 golden fixture:**v2+legacy 断言与改动前捕获的真实 wire 字节逐字节一致**(混合头 AF_INET6+映射 dst 的完整帧 hex,非仅"可解析"),**v1+legacy 断言符合 formatVersion1 原生分支语义**(TCPv6→dst 经 To16 强转后由 Go 渲染为裸 IPv4 点分文本的精确行——实测修正,非 ::ffff: 文本;TCPv4+不可转 dst→ErrInvalidAddress 错误路径关连接);formatVersion1 结论已对照当前锁定依赖 github.com/pires/go-proxyproto **v0.7.0**(go.mod 唯一版本,无 replace)源码核实 (covers: S2; depends: T1, T2)
 - [x] T4: main 装配(tcpHeaderVersion/familyMismatch 映射、NewWriter 传版本、gateway 增参)+ gateway 日志消息与包注释通用化 + proxyproto.Writer 注释更新 — acceptance: 本地真实运行 `-tcp-header-version v1 -tcp-family-mismatch legacy` 打印 WARNING 且正常代理;默认参数无 WARNING;`go build ./...` 通过 (covers: S2; depends: T2, T3)
-- [x] T5: help.text 三语言新增两行 flag 说明 + README.md / README.zh-CN.md 双字段文档 — acceptance: `go test ./internal/i18n` 通过;两份 README 含 tcp.header-version、tcp.family-mismatch 及迁移注记 (covers: S2; depends: T1)
+- [x] T5: help.text 三语言新增两行 flag 说明 + README.md / README.zh-CN.md 双字段文档 — acceptance: `go test ./internal/i18n` 通过;两份 README 含 tcp.header-version、tcp.family-mismatch;迁移注记位于 release-notes/v0.4.0.md(评审定稿位置,README 不含) (covers: S2; depends: T1)
 - [x] T6: 全量验证 — acceptance: `go build ./...`、`go vet ./...`、`go test ./...` 全绿,gofmt 无差异 (covers: S2; depends: T4, T5)

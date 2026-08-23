@@ -31,6 +31,8 @@ type Config struct {
 	Policy               string
 	DetectTimeout        time.Duration
 	TCPIdleTimeout       time.Duration // TCP pipe idle timeout (0=disabled, default 5m)
+	TCPHeaderVersion     string        // downstream PROXY header version: "v1" | "v2" (default "v2")
+	TCPFamilyMismatch    string        // mixed address-family action: "reject" | "unknown" | "legacy" (default "reject")
 	Lang                 string        // display language: "" (auto) | "en" | "zh-CN"
 	TrustedNetworks      []string
 	UntrustedProxyAction string
@@ -61,7 +63,16 @@ type Config struct {
 
 // currentConfigVersion is the config format version. Bump when new fields are
 // added; old configs with a lower version are auto-migrated on load.
-const currentConfigVersion = 2
+//
+// History:
+//   - 2 → 3 (this change): introduces tcp.header-version and tcp.family-mismatch.
+//     The bump exists so pre-v3 files migrate and get an EXPLICIT
+//     family-mismatch value: migration injects "legacy" when the key is absent,
+//     preserving historical wire behavior byte-for-byte for upgraded deployments.
+//     Fresh configs (and -init) default to "reject". The same migration pass
+//     also back-fills tcp.idle-timeout (introduced in v0.3.2 without a version
+//     bump, so older version-2 files never gained the line).
+const currentConfigVersion = 3
 
 // ConfigError carries an i18n message key so main.go can translate it.
 // The msg field is an English fallback for Go's error chain (logging, %w wrapping).
@@ -121,6 +132,8 @@ var configFields = []configField{
 	// ── TCP
 	{"tcp.detect-timeout", "TCP", time.Second, "PROXY header detection timeout (0=block indefinitely)", func(c *Config) any { return c.DetectTimeout }},
 	{"tcp.idle-timeout", "TCP", 5 * time.Minute, "pipe idle timeout, 0=disabled", func(c *Config) any { return c.TCPIdleTimeout }},
+	{"tcp.header-version", "TCP", "v2", "downstream PROXY header version: v1|v2", func(c *Config) any { return c.TCPHeaderVersion }},
+	{"tcp.family-mismatch", "TCP", "reject", "mixed address-family action: reject|unknown|legacy", func(c *Config) any { return c.TCPFamilyMismatch }},
 	// ── UDP
 	{"udp.idle-timeout", "UDP", 30 * time.Second, "UDP session idle timeout", func(c *Config) any { return c.IdleTimeout }},
 	{"udp.max-sessions", "UDP", 1024, "max concurrent UDP sessions", func(c *Config) any { return c.MaxSessions }},
@@ -146,6 +159,8 @@ const (
 	fUntrustedProxyAction = "untrusted-proxy-action"
 	fDetectTimeout        = "tcp.detect-timeout"
 	fTCPIdleTimeout       = "tcp.idle-timeout"
+	fTCPHeaderVersion     = "tcp.header-version"
+	fTCPFamilyMismatch    = "tcp.family-mismatch"
 	fIdleTimeout          = "udp.idle-timeout"
 	fMaxSessions          = "udp.max-sessions"
 	fMaxDatagramSize      = "udp.max-datagram-size"
@@ -209,6 +224,12 @@ func (c *Config) Warnings() []Warning {
 	}
 	if c.UntrustedProxyAction == "strip" {
 		ws = append(ws, Warning{Key: "warning.untrusted_proxy_action.strip"})
+	}
+	// legacy keeps the historical auto-conversion for mixed address-family
+	// headers (::ffff:-mapped IPv4 may reach downstream labeled as IPv6).
+	// Surface it at startup so operators opt in knowingly, not by omission.
+	if c.Protocol == "tcp" && c.TCPFamilyMismatch == "legacy" {
+		ws = append(ws, Warning{Key: "warning.family_mismatch.legacy"})
 	}
 	return ws
 }
@@ -331,6 +352,16 @@ func (c *Config) Validate() error {
 	if c.TCPIdleTimeout < 0 {
 		return cfgErr("error.tcp_idle_timeout_nonneg", "config: tcp.idle-timeout must be >= 0 (0=disabled), got %v", c.TCPIdleTimeout)
 	}
+	switch c.TCPHeaderVersion {
+	case "v1", "v2":
+	default:
+		return cfgErr("error.invalid_tcp_header_version", "config: invalid tcp.header-version %q (v1|v2)", c.TCPHeaderVersion)
+	}
+	switch c.TCPFamilyMismatch {
+	case "reject", "unknown", "legacy":
+	default:
+		return cfgErr("error.invalid_family_mismatch", "config: invalid tcp.family-mismatch %q (reject|unknown|legacy)", c.TCPFamilyMismatch)
+	}
 	if !validLevel(c.LogConsoleLevel) {
 		return cfgErr("error.invalid_log_console_level", "config: invalid log console level %q (debug|info|warn|error)", c.LogConsoleLevel)
 	}
@@ -420,7 +451,7 @@ const sampleConfig = `# ProxyDge configuration file.
 #
 # Precedence (highest to lowest): CLI flags > env (PROXYDGE_*) > this file > defaults.
 
-version: 2  # config format version — do NOT change; used for auto-migration
+version: 3  # config format version — do NOT change; used for auto-migration
 
 # ── General ───────────────────────────────────────────────────────────
 protocol: "tcp"                      # tcp (default) | udp — selects gateway mode
@@ -443,6 +474,8 @@ untrusted-proxy-action: "reject"     # reject (default) | strip
 tcp:
   detect-timeout: "1s"               # PROXY header detection timeout (0=block indefinitely)
   idle-timeout: "5m"                 # pipe idle timeout, 0=disabled
+  header-version: "v2"               # downstream PROXY header version: v1|v2
+  family-mismatch: "reject"          # mixed address-family action: reject|unknown|legacy
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.
@@ -473,6 +506,8 @@ func (defaultsSource) Apply(c *Config) error {
 	c.Policy = "use"
 	c.DetectTimeout = time.Second
 	c.TCPIdleTimeout = 5 * time.Minute
+	c.TCPHeaderVersion = "v2"
+	c.TCPFamilyMismatch = "reject"
 	c.LogConsoleLevel = "info"
 	c.LogConsoleFormat = "text"
 	c.LogFileLevel = "info"
@@ -517,8 +552,10 @@ type yamlFields struct {
 }
 
 type yamlTCP struct {
-	DetectTimeout *string `yaml:"detect-timeout"`
-	IdleTimeout   *string `yaml:"idle-timeout"`
+	DetectTimeout  *string `yaml:"detect-timeout"`
+	IdleTimeout    *string `yaml:"idle-timeout"`
+	HeaderVersion  *string `yaml:"header-version"`
+	FamilyMismatch *string `yaml:"family-mismatch"`
 }
 
 type yamlUDP struct {
@@ -621,6 +658,14 @@ func (s fileSource) Apply(c *Config) error {
 		}
 		c.TCPIdleTimeout = d
 		c.mark(fTCPIdleTimeout, src)
+	}
+	if y.TCP != nil && y.TCP.HeaderVersion != nil {
+		c.TCPHeaderVersion = *y.TCP.HeaderVersion
+		c.mark(fTCPHeaderVersion, src)
+	}
+	if y.TCP != nil && y.TCP.FamilyMismatch != nil {
+		c.TCPFamilyMismatch = *y.TCP.FamilyMismatch
+		c.mark(fTCPFamilyMismatch, src)
 	}
 	if y.Lang != nil {
 		c.Lang = *y.Lang
@@ -754,19 +799,39 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	// ── TCP
 	var detectTimeout *string
 	var tcpIdleTimeout *string
+	var headerVersion *string
+	var familyMismatch *string
 	if y.TCP != nil {
 		detectTimeout = y.TCP.DetectTimeout
 		tcpIdleTimeout = y.TCP.IdleTimeout
+		headerVersion = y.TCP.HeaderVersion
+		familyMismatch = y.TCP.FamilyMismatch
 	}
 	if detectTimeout == nil {
 		if v, ok := raw["detect-timeout"].(string); ok {
 			detectTimeout = &v
 		}
 	}
+	// family-mismatch has no pre-v3 equivalent: configs written before this
+	// field existed were served by the historical auto-conversion behavior
+	// (mixed address-family headers re-encoded as-is, including ::ffff:
+	// mapped IPv4 under AF_INET6). Inject "legacy" explicitly — rather than
+	// letting the fresh-config default "reject" apply — so a version upgrade
+	// never changes downstream wire behavior silently; operators opt into the
+	// stricter reject/unknown deliberately after reading the startup warning.
+	// idle-timeout below gets back-filled with its default for a similar
+	// reason: v0.3.2 introduced it without a version bump, so older
+	// version-2 files never gained the line and were never migrated.
+	if familyMismatch == nil {
+		legacy := "legacy"
+		familyMismatch = &legacy
+	}
 	b.WriteString("\n# ── TCP (protocol=tcp) ───────────────────────────────────────────────\n")
 	b.WriteString("tcp:\n")
 	writeStrFieldIndent(&b, "detect-timeout", detectTimeout, "1s", "PROXY header detection timeout (0=block indefinitely)", "  ")
 	writeStrFieldIndent(&b, "idle-timeout", tcpIdleTimeout, "5m", "pipe idle timeout, 0=disabled", "  ")
+	writeStrFieldIndent(&b, "header-version", headerVersion, "v2", "downstream PROXY header version: v1|v2", "  ")
+	writeStrFieldIndent(&b, "family-mismatch", familyMismatch, "reject", "mixed address-family action: reject|unknown|legacy", "  ")
 
 	// ── UDP
 	var idleTimeout *string
@@ -925,6 +990,14 @@ func (envSource) Apply(c *Config) error {
 		c.TCPIdleTimeout = d
 		c.mark(fTCPIdleTimeout, "env")
 	}
+	if v, ok := os.LookupEnv(envPrefix + "TCP_HEADER_VERSION"); ok && v != "" {
+		c.TCPHeaderVersion = v
+		c.mark(fTCPHeaderVersion, "env")
+	}
+	if v, ok := os.LookupEnv(envPrefix + "TCP_FAMILY_MISMATCH"); ok && v != "" {
+		c.TCPFamilyMismatch = v
+		c.mark(fTCPFamilyMismatch, "env")
+	}
 	if v, ok := os.LookupEnv(envPrefix + "LANG"); ok && v != "" {
 		c.Lang = v
 		c.mark(fLang, "env")
@@ -1000,6 +1073,7 @@ type flagValues struct {
 	listen, upstream, policy, config         *string
 	detectTimeout                            *time.Duration
 	tcpIdleTimeout                           *time.Duration
+	tcpHeaderVersion, tcpFamilyMismatch      *string
 	lang                                     *string
 	logConsoleLevel, logConsoleFormat        *string
 	logFilePath, logFileLevel, logFileFormat *string
@@ -1022,6 +1096,8 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.config = fs.String("config", "", "config file path (overrides exe-dir config.yaml)")
 	fv.detectTimeout = fs.Duration("tcp-detect-timeout", 0, "PROXY header detection timeout (0=block indefinitely)")
 	fv.tcpIdleTimeout = fs.Duration("tcp-idle-timeout", 0, "pipe idle timeout (0=disabled, default 5m)")
+	fv.tcpHeaderVersion = fs.String("tcp-header-version", "", "downstream PROXY header version: v1|v2 (default v2)")
+	fv.tcpFamilyMismatch = fs.String("tcp-family-mismatch", "", "mixed address-family action: reject|unknown|legacy (default reject)")
 	fv.lang = fs.String("lang", "", "display language: en|zh-CN|zh-TW (default auto)")
 	fv.logConsoleLevel = fs.String("log-console-level", "", "console log level: debug|info|warn|error")
 	fv.logConsoleFormat = fs.String("log-console-format", "", "console log format: text|json")
@@ -1068,6 +1144,14 @@ func (s flagSource) Apply(c *Config) error {
 	if s.set["tcp-idle-timeout"] {
 		c.TCPIdleTimeout = *s.fv.tcpIdleTimeout
 		c.mark(fTCPIdleTimeout, "flag")
+	}
+	if s.set["tcp-header-version"] {
+		c.TCPHeaderVersion = *s.fv.tcpHeaderVersion
+		c.mark(fTCPHeaderVersion, "flag")
+	}
+	if s.set["tcp-family-mismatch"] {
+		c.TCPFamilyMismatch = *s.fv.tcpFamilyMismatch
+		c.mark(fTCPFamilyMismatch, "flag")
 	}
 	if s.set["lang"] {
 		c.Lang = *s.fv.lang

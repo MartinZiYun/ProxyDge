@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -81,4 +82,25 @@ func TestFieldRegistryConsistency(t *testing.T) {
 			t.Errorf("field %q: defaultsSource gives %v, registry says %v", f.name, got, f.defVal)
 		}
 	}
+}
+
+// TestSampleConfigVersionIsCurrent: the -init template must declare the
+// CURRENT config format version. A stale version here self-heals on first
+// load — fileSource migrates the fresh install's own config — which silently
+// converts every new deployment into a "migrated" one (NOTICE + .bak +, since
+// the 2->3 bump, injection of family-mismatch:"legacy" where docs promise the
+// plain "reject" default). Round-trip tests cannot catch this: migration
+// repairs the file before their assertions run. This guard fails at CI time
+// on any future version bump that forgets the template.
+func TestSampleConfigVersionIsCurrent(t *testing.T) {
+	want := fmt.Sprintf("version: %d", currentConfigVersion)
+	for _, line := range strings.Split(sampleConfig, "\n") {
+		if strings.HasPrefix(line, "version:") {
+			if got := strings.TrimSpace(strings.SplitN(line, "#", 2)[0]); got != want {
+				t.Fatalf("sampleConfig declares %q, want %q (bump currentConfigVersion? update the template)", got, want)
+			}
+			return
+		}
+	}
+	t.Fatal("sampleConfig has no version line")
 }

@@ -3,7 +3,7 @@
   <p align="center">A PROXY Protocol normalizing gateway for TCP and UDP.</p>
 </p>
 
-Listens on a port, accepts upstream connections/datagrams (direct / PROXY Protocol v1 / v2), normalizes them all to PROXY Protocol v2, and forwards to a single configurable downstream. The downstream therefore always receives a uniform v2 header — the upstream protocol variant differences are absorbed by this service.
+Listens on a port, accepts upstream connections/datagrams (direct / PROXY Protocol v1 / v2), normalizes them all to a single configurable PROXY Protocol version, and forwards to a downstream. The upstream protocol variant differences are absorbed by this service.
 
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go">
@@ -16,7 +16,7 @@ Listens on a port, accepts upstream connections/datagrams (direct / PROXY Protoc
 ## Features
 
 - **Dual-protocol**: TCP (byte-stream with half-close) and UDP (datagram with session model) — each with its own dedicated gateway, no shared stream abstraction
-- **Protocol normalization**: direct, PROXY v1, PROXY v2 → uniform PROXY v2 output
+- **Protocol normalization**: direct, PROXY v1, PROXY v2 → uniform output version of choice (`tcp.header-version`), plus explicit policy for self-contradictory mixed-address-family headers
 - **IPv4/IPv6 dual-stack**: full IPv6 support including link-local zone identifiers for UDP session routing
 - **Source trust control**: only configured trusted IP networks may send PROXY headers, preventing address spoofing. Supports CIDR notation and bare IPs (IPv4/IPv6)
 - **Policy control**: `use` (default, accept all three) / `require` (PROXY header mandatory) / `reject` (no PROXY header allowed)
@@ -47,7 +47,7 @@ vi config.yaml
 Sample config file:
 
 ```yaml
-version: 2  # do NOT change; used for auto-migration
+version: 3  # do NOT change; used for auto-migration
 
 # ── General ───────────────────────────────────────────────────────────
 protocol: "tcp"                      # tcp (default) | udp — selects gateway mode
@@ -69,6 +69,8 @@ untrusted-proxy-action: "reject"     # reject (default) | strip
 tcp:
   detect-timeout: "1s"               # PROXY header detection timeout (0=block indefinitely)
   idle-timeout: "5m"               # pipe idle timeout, 0=disabled
+  header-version: "v2"               # downstream PROXY header version: v1|v2
+  family-mismatch: "reject"          # mixed address-family action: reject|unknown|legacy
 
 # ── UDP (protocol=udp) ───────────────────────────────────────────────
 # The following fields are only used when protocol=udp.
@@ -124,6 +126,8 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 | `-lang <locale>` | auto-detect | `en` \| `zh-CN` \| `zh-TW` |
 | `-tcp-detect-timeout <dur>` | `1s` | PROXY header detection timeout (0=block indefinitely) |
 | `-tcp-idle-timeout <dur>` | `5m` | Pipe idle timeout (0=disabled) |
+| `-tcp-header-version <v>` | `v2` | Downstream PROXY header version: `v1` \| `v2` |
+| `-tcp-family-mismatch <a>` | `reject` | Mixed address-family action: `reject` \| `unknown` \| `legacy` |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session idle timeout |
 | `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions |
 | `-udp-max-datagram-size <n>` | `65535` | Max datagram size (0=unlimited) |
@@ -170,6 +174,8 @@ PROXYDGE_TRUSTED_NETWORKS=10.0.0.0/8,192.168.0.0/16
 PROXYDGE_UNTRUSTED_PROXY_ACTION=reject
 PROXYDGE_LANG=zh-CN
 PROXYDGE_TCP_DETECT_TIMEOUT=2s
+PROXYDGE_TCP_HEADER_VERSION=v1
+PROXYDGE_TCP_FAMILY_MISMATCH=unknown
 PROXYDGE_UDP_IDLE_TIMEOUT=60s
 PROXYDGE_UDP_MAX_SESSIONS=2048
 PROXYDGE_UDP_MAX_DATAGRAM_SIZE=1500
@@ -222,6 +228,30 @@ trusted-networks:
 
 - `trusted-networks` empty → warns that all sources are trusted, posing a spoofing risk
 - `untrusted-proxy-action=strip` → warns that untrusted sources can still connect
+- `tcp.family-mismatch=legacy` → warns that historical auto-conversion is kept for mismatched headers (`::ffff:`-mapped IPv4 may reach downstream labeled as IPv6)
+
+## TCP Output Version & Address-Family Mismatch
+
+### `tcp.header-version` — normalization target
+
+ProxyDge accepts direct connections and PROXY v1/v2 headers upstream, then re-encodes every connection into ONE version for the downstream:
+
+- `v2` (default): binary header — full address-family coverage, extensible
+- `v1`: text header (`PROXY TCP4 ...` / `PROXY TCP6 ...`) — for downstream services that only understand the legacy text format
+
+Inherent v1 limits: no TLV support, and a source/destination family mix cannot be represented faithfully.
+
+### `tcp.family-mismatch` — when a header contradicts itself
+
+A PROXY header declares ONE address family covering both addresses. A crafted or buggy upstream can send a header declaring INET6 whose destination is really an IPv4 address in `::ffff:` mapped form. Re-encoding it silently coerces the address — downstream may treat `::ffff:192.168.1.1` as a genuine IPv6 target and fail or misconnect. ProxyDge never fabricates addresses; you choose the disposition:
+
+| Value | Behavior |
+|-------|----------|
+| `reject` (default) | Close the connection before dialing downstream; log the rejection |
+| `unknown` | Forward an address-less header — `PROXY UNKNOWN` with v1 output, LOCAL+AF_UNSPEC with v2 — so downstream falls back per spec |
+| `legacy` | Skip the check entirely; keep the historical byte-for-byte behavior including silent `::ffff:` mapping. Prints a startup WARNING |
+
+The check runs on the FINAL header after trust/policy processing: direct connections and stripped untrusted headers are rebuilt from real socket addresses, which are always self-consistent — they are never affected.
 
 ## UDP Gateway
 

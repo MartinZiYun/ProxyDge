@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -67,7 +68,7 @@ func startGateway(t *testing.T, policy Policy, upstream string) string {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -87,7 +88,7 @@ func startGatewayTrusted(t *testing.T, policy Policy, upstream string, trustCIDR
 	if err != nil {
 		t.Fatalf("NewTrustChecker: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted)
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2), policy, upstream, 50*time.Millisecond, 0, slog.New(slog.NewTextHandler(io.Discard, nil)), tc, untrusted, FamilyMismatchLegacy)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 	return ln.Addr().String()
@@ -534,9 +535,9 @@ func TestServeRetriesTransientAcceptErrors(t *testing.T) {
 	flaky := &flakyListener{Listener: tcpTestListener{ln: ln}}
 	flaky.remainingFailures.Store(2)
 
-	g := New(flaky, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+	g := New(flaky, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, time.Second, 0,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
 	errc := make(chan error, 1)
 	go func() { errc <- g.Serve() }()
 
@@ -619,9 +620,9 @@ func TestPipeIdleTimeout_ClientIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, 50*time.Millisecond, 100*time.Millisecond,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -664,9 +665,9 @@ func TestPipeIdleTimeout_IndependentDirections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gateway listen: %v", err)
 	}
-	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(),
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(2),
 		PolicyUse, downAddr, 50*time.Millisecond, idle,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, FamilyMismatchLegacy)
 	go func() { _ = g.Serve() }()
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -701,5 +702,163 @@ func TestPipeIdleTimeout_IndependentDirections(t *testing.T) {
 	// certain flow spanned several idle windows (i.e. survived dir1's FIN).
 	if received < 100 {
 		t.Fatalf("expected sustained upstream traffic across ≥3 idle periods, got %d bytes", received)
+	}
+}
+
+// --- family-mismatch integration (spec T3) ---
+//
+// These exercise the FULL chain — crafted inbound header → reader → Decide →
+// FamilyMatchesAddrs guard → writer → downstream wire — not just the pieces.
+
+// mixedV2Header builds the only wire-craftable contradictory shape: an
+// AF_INET6 v2 header whose destination is the ::ffff:-mapped form of
+// 192.168.1.1. Pre-change gateways forwarded this to downstream as
+// AF_INET6 + ::ffff:c0a8:101 (see the legacy golden below).
+func mixedV2Header(t *testing.T) []byte {
+	t.Helper()
+	body := []byte{0x21, 0x21, 0x00, 0x24} // ver2|PROXY, INET6|STREAM, len=36
+	body = append(body, net.ParseIP("2001:db8::1").To16()...)
+	body = append(body, net.ParseIP("::ffff:192.168.1.1").To16()...)
+	body = binary.BigEndian.AppendUint16(body, 443)
+	body = binary.BigEndian.AppendUint16(body, 80)
+	return append(sigV2, body...)
+}
+
+func startGatewayFM(t *testing.T, writerVer byte, fm FamilyMismatchAction, upstream string) string {
+	t.Helper()
+	ln, err := tcp.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("gateway listen: %v", err)
+	}
+	g := New(ln, tcp.TCPDialer{}, goproxyproto.NewReader(), goproxyproto.NewWriter(writerVer),
+		PolicyUse, upstream, 50*time.Millisecond, 0,
+		slog.New(slog.NewTextHandler(io.Discard, nil)), nil, UntrustedReject, fm)
+	go func() { _ = g.Serve() }()
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln.Addr().String()
+}
+
+// TestConsistentHeaderPassesUnderReject: the guard must never false-positive
+// on well-formed traffic — a regular v2 header flows normally even under the
+// strictest action.
+func TestConsistentHeaderPassesUnderReject(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayFM(t, 2, FamilyMismatchReject, downAddr)
+
+	echo, _ := dialAndExchange(t, gw, mustHex(t, tcp4HeaderHex), []byte("PING"))
+	select {
+	case got := <-recorded:
+		if !bytes.HasSuffix(got, []byte("PING")) {
+			t.Fatalf("downstream missing payload: %x", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("consistent header was blocked under reject")
+	}
+	if !bytes.HasSuffix(echo, []byte("PING")) {
+		t.Fatalf("echo: want PING, got %q", echo)
+	}
+}
+
+// TestFamilyMismatchRejectClosesBeforeDialing: reject hands downstream zero
+// bytes — no dial, no header, no payload.
+func TestFamilyMismatchRejectClosesBeforeDialing(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayFM(t, 2, FamilyMismatchReject, downAddr)
+
+	echo, _ := dialAndExchange(t, gw, mixedV2Header(t), []byte("PING"))
+	if len(echo) != 0 {
+		t.Fatalf("rejected connection should see EOF, got %q", echo)
+	}
+	select {
+	case got := <-recorded:
+		t.Fatalf("downstream received data under reject: %x", got)
+	case <-time.After(300 * time.Millisecond):
+		// expected: nothing ever dialed
+	}
+}
+
+// TestFamilyMismatchUnknownV1Wire: full-chain unknown rewrite with a v1
+// writer — downstream must read the exact honest short line, then payload.
+func TestFamilyMismatchUnknownV1Wire(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayFM(t, 1, FamilyMismatchUnknown, downAddr)
+
+	dialAndExchange(t, gw, mixedV2Header(t), []byte("PING"))
+	select {
+	case got := <-recorded:
+		want := append([]byte("PROXY UNKNOWN\r\n"), []byte("PING")...)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("wire:\nwant %x\n got %x", want, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("downstream saw nothing under unknown/v1")
+	}
+}
+
+// TestFamilyMismatchUnknownV2LocalWire: same rewrite through the v2 writer —
+// downstream reads the complete 16-byte LOCAL+AF_UNSPEC frame (sig + 0x20 +
+// 0x00 + 0x0000), proving the GATEWAY produced the UNSPEC header rather than
+// the writer merely being able to encode one.
+func TestFamilyMismatchUnknownV2LocalWire(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayFM(t, 2, FamilyMismatchUnknown, downAddr)
+
+	dialAndExchange(t, gw, mixedV2Header(t), []byte("PING"))
+	select {
+	case got := <-recorded:
+		local := mustHex(t, "0d0a0d0a000d0a515549540a20000000")
+		want := append(local, []byte("PING")...)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("wire:\nwant %x\n got %x", want, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("downstream saw nothing under unknown/v2")
+	}
+}
+
+// legacyMixedV2WireHex is the REAL wire output captured from the pre-change
+// pipeline (reader → fixed-v2 writer) for mixedV2Header, before this feature
+// existed. The legacy action must reproduce it byte-for-byte: sig + ver/cmd
+// 0x21 + fam/proto 0x21(INET6/STREAM) + len 36 + src 2001:db8::1 + dst
+// ::ffff:192.168.1.1 (the silent To16 coercion this feature makes explicit)
+// + ports 443/80.
+const legacyMixedV2WireHex = "0d0a0d0a000d0a515549540a2121002420010db800000000000000000000000100000000000000000000ffffc0a8010101bb0050"
+
+// TestLegacyV2GoldenBytes: legacy + v2 output is byte-identical to the
+// historical pipeline — the regression fixture IS the old wire, not merely
+// "something parseable".
+func TestLegacyV2GoldenBytes(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayFM(t, 2, FamilyMismatchLegacy, downAddr)
+
+	dialAndExchange(t, gw, mixedV2Header(t), []byte("PING"))
+	select {
+	case got := <-recorded:
+		want := append(mustHex(t, legacyMixedV2WireHex), []byte("PING")...)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("legacy v2 wire diverges from history:\nwant %x\n got %x", want, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("downstream saw nothing under legacy/v2")
+	}
+}
+
+// TestLegacyV1GoldenText: legacy + v1 output follows formatVersion1's native
+// TCPv6 branch — the IPv4 destination is coerced via To16() into its mapped
+// text form and emitted as TCP6. Exact-string fixture per the library's
+// documented behavior at the pinned go-proxyproto v0.7.0.
+func TestLegacyV1GoldenText(t *testing.T) {
+	downAddr, recorded := startDownstream(t)
+	gw := startGatewayFM(t, 1, FamilyMismatchLegacy, downAddr)
+
+	dialAndExchange(t, gw, mixedV2Header(t), []byte("PING"))
+	select {
+	case got := <-recorded:
+		want := append([]byte("PROXY TCP6 2001:db8::1 192.168.1.1 443 80\r\n"), []byte("PING")...)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("legacy v1 wire:\nwant %x (%q)\n got %x (%q)", want, want, got, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("downstream saw nothing under legacy/v1")
 	}
 }

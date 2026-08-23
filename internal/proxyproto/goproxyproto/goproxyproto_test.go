@@ -131,7 +131,7 @@ func TestWriterTCP4(t *testing.T) {
 		Family:  pp.FamilyTCP4,
 	}
 	var buf bytes.Buffer
-	if err := NewWriter().WriteTo(&buf, hdr); err != nil {
+	if err := NewWriter(2).WriteTo(&buf, hdr); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	want := mustHex(t, tcp4Header)
@@ -149,11 +149,88 @@ func TestWriterTCP6(t *testing.T) {
 		Family:  pp.FamilyTCP6,
 	}
 	var buf bytes.Buffer
-	if err := NewWriter().WriteTo(&buf, hdr); err != nil {
+	if err := NewWriter(2).WriteTo(&buf, hdr); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	want := mustHex(t, tcp6Header)
 	if got := buf.Bytes(); !bytes.Equal(got, want) {
 		t.Fatalf("output:\nwant %x\n got %x", want, got)
+	}
+}
+
+// TestWriterV1Text: tcp.header-version=v1 emits the classic text form. The
+// expected string is the spec-defined layout, not library-derived — if the
+// library changes its v1 formatting this must fail loudly.
+func TestWriterV1Text(t *testing.T) {
+	hdr := pp.Header{
+		SrcIP:   net.IPv4(192, 0, 2, 1),
+		SrcPort: 1234,
+		DstIP:   net.IPv4(198, 51, 100, 1),
+		DstPort: 8080,
+		Family:  pp.FamilyTCP4,
+	}
+	var buf bytes.Buffer
+	if err := NewWriter(1).WriteTo(&buf, hdr); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	want := "PROXY TCP4 192.0.2.1 198.51.100.1 1234 8080\r\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("v1 text:\nwant %q\n got %q", want, got)
+	}
+}
+
+// TestWriterUnspecV1UnknownLine: an address-unknown header (family-mismatch=
+// unknown landing zone) becomes the protocol's honest short line — no
+// invented addresses downstream.
+func TestWriterUnspecV1UnknownLine(t *testing.T) {
+	var buf bytes.Buffer
+	if err := NewWriter(1).WriteTo(&buf, pp.Header{}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if want, got := "PROXY UNKNOWN\r\n", buf.String(); got != want {
+		t.Fatalf("UNKNOWN line:\nwant %q\n got %q", want, got)
+	}
+}
+
+// TestWriterUnspecV2LocalFrame: v2's equivalent of UNKNOWN is Command=LOCAL
+// with AF_UNSPEC and a zero-length address section. Full-wire assertion:
+//
+//	sig (12B)              0d 0a 0d 0a 00 0d 0a 51 55 49 54 0a
+//	ver|cmd                20        (version 2, command LOCAL)
+//	fam|proto              00        (AF_UNSPEC, UNSPEC)
+//	length                 00 00     (no address section follows)
+func TestWriterUnspecV2LocalFrame(t *testing.T) {
+	var buf bytes.Buffer
+	if err := NewWriter(2).WriteTo(&buf, pp.Header{}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	want := mustHex(t, "0d0a0d0a000d0a515549540a20000000")
+	if got := buf.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("LOCAL frame:\nwant %x\n got %x", want, got)
+	}
+	if buf.Len() != 16 {
+		t.Fatalf("LOCAL frame length: want 16, got %d", buf.Len())
+	}
+}
+
+// TestWriterMixedFamilyErrorsBothVersions: a family-TCP4 header whose dst is
+// pure IPv6 cannot be encoded faithfully by either version — the library's
+// IPv4 branches need dst.To4() and return ErrInvalidAddress. The gateway
+// turns this into the reject/unknown decision BEFORE dialing; the writer
+// just refuses honestly rather than fabricating bytes.
+func TestWriterMixedFamilyErrorsBothVersions(t *testing.T) {
+	hdr := pp.Header{
+		SrcIP:   net.IPv4(192, 0, 2, 1),
+		SrcPort: 1234,
+		DstIP:   net.ParseIP("2001:db8::1"),
+		DstPort: 8080,
+		Family:  pp.FamilyTCP4,
+	}
+	for _, ver := range []byte{1, 2} {
+		var buf bytes.Buffer
+		err := NewWriter(ver).WriteTo(&buf, hdr)
+		if !errors.Is(err, gop.ErrInvalidAddress) {
+			t.Fatalf("v%d mixed-family: want ErrInvalidAddress, got %v", ver, err)
+		}
 	}
 }

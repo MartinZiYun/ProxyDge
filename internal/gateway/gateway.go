@@ -1,7 +1,9 @@
 // Package gateway implements the PROXY-protocol normalizing proxy. It accepts
-// inbound connections (direct, PROXY v1, or PROXY v2), normalizes them all to a
-// PROXY v2 header, dials a single downstream, writes the header, and pipes
-// bytes both ways with TCP half-close. The gateway depends only on the
+// inbound connections (direct, PROXY v1, or PROXY v2), normalizes them all to
+// a PROXY Protocol header in the configured output version (tcp.header-version,
+// v1 or v2), applies the configured mixed-address-family disposition
+// (tcp.family-mismatch), dials a single downstream, writes the header, and
+// pipes bytes both ways with TCP half-close. The gateway depends only on the
 // proxyproto and tcp abstractions — never on the go-proxyproto library
 // or the config/slog-sink wiring directly. It receives a single unified
 // *slog.Logger and is unaware of how many sinks exist.
@@ -45,6 +47,42 @@ func (p Policy) String() string {
 	return "unknown"
 }
 
+// FamilyMismatchAction selects how the gateway disposes of connections whose
+// FINAL downstream header fails proxyproto.FamilyMatchesAddrs — i.e. the
+// header's declared family contradicts what its addresses actually express
+// (the only wire-craftable shape being AF_INET6 carrying an ::ffff:-mapped
+// IPv4 address). The check runs after Decide(), so stripped/direct headers
+// (rebuilt from socket addresses, always self-consistent) never trip it.
+type FamilyMismatchAction int
+
+const (
+	// FamilyMismatchReject closes the connection before dialing downstream:
+	// a clean, explicit failure that hands downstream zero interpretable data.
+	FamilyMismatchReject FamilyMismatchAction = iota
+	// FamilyMismatchUnknown rewrites the header to the address-less form —
+	// the writer then emits "PROXY UNKNOWN\r\n" (v1) or a LOCAL+AF_UNSPEC
+	// frame (v2) — telling downstream per spec to fall back to its own view.
+	FamilyMismatchUnknown
+	// FamilyMismatchLegacy skips detection entirely: headers flow into the
+	// version-parameterized writer unguarded, whose library-native coercion
+	// reproduces the historical behavior byte-for-byte (including silent
+	// ::ffff:-mapped emission). Escape hatch for pre-v3 deployments; the
+	// startup banner warns when it is selected.
+	FamilyMismatchLegacy
+)
+
+func (a FamilyMismatchAction) String() string {
+	switch a {
+	case FamilyMismatchReject:
+		return "reject"
+	case FamilyMismatchUnknown:
+		return "unknown"
+	case FamilyMismatchLegacy:
+		return "legacy"
+	}
+	return "unknown-action"
+}
+
 // Gateway normalizes inbound PROXY headers (v1/v2/direct) to v2 and pipes to a
 // single downstream target.
 type Gateway struct {
@@ -59,6 +97,7 @@ type Gateway struct {
 	log             *slog.Logger
 	trust           *TrustChecker
 	untrusted       UntrustedAction
+	mixedFamily     FamilyMismatchAction
 }
 
 // New constructs a Gateway. The listener, dialer, reader, writer, and logger
@@ -70,8 +109,10 @@ type Gateway struct {
 // close). pipeIdleTimeout bounds the bidirectional pipe after header detection:
 // if no data flows in a direction for this duration, that side is closed.
 // Pass 0 to disable (pipe blocks indefinitely — DoS risk in untrusted envs).
-// logger may be nil (a discarding logger is used).
-func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout, pipeIdleTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction) *Gateway {
+// mixedFamily selects the disposition for headers whose declared family
+// contradicts their addresses (see FamilyMismatchAction). logger may be nil
+// (a discarding logger is used).
+func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.Writer, policy Policy, upstream string, detectTimeout, pipeIdleTimeout time.Duration, logger *slog.Logger, trust *TrustChecker, untrusted UntrustedAction, mixedFamily FamilyMismatchAction) *Gateway {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -87,6 +128,7 @@ func New(ln tcp.Listener, dialer tcp.Dialer, r proxyproto.Reader, w proxyproto.W
 		log:             logger,
 		trust:           trust,
 		untrusted:       untrusted,
+		mixedFamily:     mixedFamily,
 	}
 }
 
@@ -166,6 +208,25 @@ func (g *Gateway) handle(c tcp.Conn) {
 		return
 	}
 
+	// Address-family guard on the FINAL downstream header — i.e. what this
+	// connection would actually write after Decide() (a stripped header was
+	// rebuilt from socket addresses and is self-consistent by construction,
+	// so legitimate direct/strip flows never trip here). legacy skips the
+	// check entirely: headers reach the writer unguarded, whose library-
+	// native coercion reproduces historical bytes including ::ffff: mapping.
+	if g.mixedFamily != FamilyMismatchLegacy && !proxyproto.FamilyMatchesAddrs(hdr) {
+		if g.mixedFamily == FamilyMismatchReject {
+			g.log.Info("rejected: header family contradicts its addresses", "remote", c.RemoteAddr())
+			return
+		}
+		// unknown: rewrite to the address-less form. The writer turns the
+		// zero header into PROXY UNKNOWN / LOCAL+AF_UNSPEC per negotiated
+		// version, so downstream is told to fall back rather than being fed
+		// addresses that would need coercion to represent.
+		g.log.Info("family mismatch: forwarding address-less header", "remote", c.RemoteAddr())
+		hdr = proxyproto.Header{}
+	}
+
 	g.log.Info("accept", "remote", c.RemoteAddr(), "source", src, "policy", g.policy.String(), "upstream", g.upstream)
 
 	// TCP-specific: dial downstream.
@@ -177,7 +238,7 @@ func (g *Gateway) handle(c tcp.Conn) {
 	defer up.Close()
 
 	if err := g.writer.WriteTo(up, hdr); err != nil {
-		g.log.Error("write v2 header to downstream", "upstream", g.upstream, "err", err)
+		g.log.Error("write header to downstream", "upstream", g.upstream, "err", err)
 		return
 	}
 

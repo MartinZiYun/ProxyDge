@@ -26,6 +26,7 @@ jobs:
         include:
           - { goos: linux,   goarch: amd64 }
           - { goos: linux,   goarch: arm64 }
+          - { goos: linux,   goarch: arm, goarm: '7' }
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
     steps:
@@ -38,6 +39,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: '0'
           VERSION:      ${{ needs.ci.outputs.version }}
           BUILD_NUMBER: ${{ needs.ci.outputs.build_number }}

@@ -1,6 +1,9 @@
 # GoReleaser config for tagged releases. ldflags inject the version metadata
 # computed by the CI workflow (VERSION/BUILD_NUMBER/COMMIT/BUILD_TIME env vars).
-# Targets: linux + windows, amd64 + arm64.
+# Targets: linux (amd64/arm64/arm-v7/386/riscv64/loong64), windows (amd64/arm64),
+# darwin (amd64/arm64), freebsd (amd64). Invalid GOOS/GOARCH combos in the
+# matrix below are skipped by GoReleaser automatically; explicit ignores cover
+# the VALID-but-unwanted combos (windows/386, freebsd/arm, freebsd/386).
 version: 2
 
 project_name: proxydge
@@ -11,8 +14,18 @@ builds:
     binary: proxydge
     env:
       - CGO_ENABLED=0
-    goos: [linux, windows]
-    goarch: [amd64, arm64]
+    goos: [linux, windows, darwin, freebsd]
+    goarch: [amd64, arm64, arm, 386, riscv64, loong64]
+    goarm: ["7"]
+    ignore:
+      - goos: windows
+        goarch: 386
+      - goos: freebsd
+        goarch: arm64
+      - goos: freebsd
+        goarch: arm
+      - goos: freebsd
+        goarch: 386
     ldflags:
       - -s -w
       - -X 'proxydge/internal/version.Version={{.Env.VERSION}}'

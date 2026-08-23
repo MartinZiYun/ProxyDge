@@ -39,7 +39,7 @@ type Config struct {
 	UntrustedProxyAction string
 	Protocol             string        // "tcp" (default) | "udp"
 	IdleTimeout          time.Duration // UDP session idle timeout (default 30s)
-	MaxSessions          int           // max concurrent UDP sessions (default 1024)
+	MaxSessions          int           // max concurrent UDP sessions (0=unlimited, default 1024)
 	MaxDatagramSize      int           // max datagram size, oversized=drop (default 65535)
 	UDPHeaderMode        string        // "every_datagram" (default) | "first_datagram"
 	ConfigPath           string        // resolved config file path (meta; not validated)
@@ -138,7 +138,7 @@ var configFields = []configField{
 	{"tcp.max-connections", "TCP", 4096, "max concurrent connections, 0=unlimited, over-limit accept closed", func(c *Config) any { return c.TCPMaxConnections }},
 	// ── UDP
 	{"udp.idle-timeout", "UDP", 30 * time.Second, "UDP session idle timeout", func(c *Config) any { return c.IdleTimeout }},
-	{"udp.max-sessions", "UDP", 1024, "max concurrent UDP sessions", func(c *Config) any { return c.MaxSessions }},
+	{"udp.max-sessions", "UDP", 1024, "max concurrent UDP sessions, 0=unlimited", func(c *Config) any { return c.MaxSessions }},
 	{"udp.max-datagram-size", "UDP", 65535, "max datagram size, 0=unlimited, oversized=drop", func(c *Config) any { return c.MaxDatagramSize }},
 	{"udp.header-mode", "UDP", "every_datagram", "every_datagram (default) | first_datagram", func(c *Config) any { return c.UDPHeaderMode }},
 	// ── Logging
@@ -328,8 +328,8 @@ func (c *Config) Validate() error {
 	default:
 		return cfgErr("error.invalid_udp_header_mode", "config: invalid udp.header-mode %q (every_datagram|first_datagram)", c.UDPHeaderMode)
 	}
-	if c.MaxSessions <= 0 {
-		return cfgErr("error.max_sessions_positive", "config: max-sessions must be > 0, got %d", c.MaxSessions)
+	if c.MaxSessions < 0 {
+		return cfgErr("error.max_sessions_nonneg", "config: max-sessions must be >= 0 (0=unlimited), got %d", c.MaxSessions)
 	}
 	if c.MaxDatagramSize < 0 {
 		return cfgErr("error.max_datagram_size_nonneg", "config: max-datagram-size must be >= 0 (0=unlimited), got %d", c.MaxDatagramSize)
@@ -488,7 +488,7 @@ tcp:
 # The following fields are only used when protocol=udp.
 udp:
   idle-timeout: "30s"               # UDP session idle timeout
-  max-sessions: 1024                # max concurrent UDP sessions
+  max-sessions: 1024                # max concurrent UDP sessions, 0=unlimited
   max-datagram-size: 65535          # max datagram size, 0=unlimited, oversized=drop
   header-mode: every_datagram       # every_datagram (default) | first_datagram
 
@@ -896,7 +896,7 @@ func generateMigratedConfig(y *yamlFields, raw map[string]any) string {
 	if maxSessions != nil {
 		ms = *maxSessions
 	}
-	fmt.Fprintf(&b, "  max-sessions: %d  # max concurrent UDP sessions\n", ms)
+	fmt.Fprintf(&b, "  max-sessions: %d  # max concurrent UDP sessions, 0=unlimited\n", ms)
 	mds := 65535
 	if maxDatagramSize != nil {
 		mds = *maxDatagramSize
@@ -1130,7 +1130,7 @@ func parseFlags(args []string) (*flagValues, map[string]bool, error) {
 	fv.untrustedProxyAction = fs.String("untrusted-proxy-action", "", "action for untrusted sources with PROXY header: reject|strip")
 	fv.protocol = fs.String("protocol", "", "transport protocol: tcp|udp")
 	fv.idleTimeout = fs.Duration("udp-idle-timeout", 0, "UDP session idle timeout")
-	fv.maxSessions = fs.Int("udp-max-sessions", 0, "max concurrent UDP sessions")
+	fv.maxSessions = fs.Int("udp-max-sessions", 0, "max concurrent UDP sessions, 0=unlimited (default 1024)")
 	fv.maxDatagramSize = fs.Int("udp-max-datagram-size", 0, "max datagram size (0=unlimited)")
 	fv.udpHeaderMode = fs.String("udp-header-mode", "", "UDP header mode: every_datagram|first_datagram")
 	if err := fs.Parse(args); err != nil {

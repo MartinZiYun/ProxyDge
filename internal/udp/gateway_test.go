@@ -900,3 +900,34 @@ func TestHandleDatagramDropsWhenCreationRaceReturnsExpiredSession(t *testing.T) 
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// TestMaxSessionsZeroUnlimited: udp.max-sessions=0 disables the cap — every
+// distinct source is served (mirror of TestMaxSessionsDrops' positive case).
+func TestMaxSessionsZeroUnlimited(t *testing.T) {
+	downAddr, recorded := startTestDownstream(t)
+	g, err := New(
+		"127.0.0.1:0", downAddr,
+		gateway.PolicyUse, nil, gateway.UntrustedReject,
+		OutputEveryDatagram, 30*time.Second, 0, 65535,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("gateway: %v", err)
+	}
+	t.Cleanup(func() { g.Close() })
+	go func() { _ = g.Serve() }()
+	time.Sleep(50 * time.Millisecond)
+	gwAddr := g.listener.LocalAddr().String()
+
+	for i := 0; i < 4; i++ {
+		pc, _ := net.Dial("udp", gwAddr) // fresh ephemeral source each round
+		if _, err := pc.Write([]byte("PING")); err != nil {
+			t.Fatalf("client %d write: %v", i, err)
+		}
+		waitForRecorded(t, recorded, 2*time.Second) // served, not dropped
+		pc.Close()
+	}
+	if got := g.manager.Count(); got < 4 {
+		t.Fatalf("sessions tracked under unlimited cap: want >=4 concurrent creations, count now %d (idle expiry may race)", got)
+	}
+}

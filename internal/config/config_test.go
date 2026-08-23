@@ -467,3 +467,26 @@ func TestDefaultsTCPMaxConnections(t *testing.T) {
 		t.Fatalf("default tcp.max-connections: want 4096, got %d", c.TCPMaxConnections)
 	}
 }
+
+// TestValidateUDPMaxSessionsNonneg: udp.max-sessions is now symmetric with
+// tcp.max-connections — negative values are invalid, 0 means unlimited.
+func TestValidateUDPMaxSessionsNonneg(t *testing.T) {
+	var c Config
+	(defaultsSource{}).Apply(&c)
+	c.Upstream = "1.2.3.4:80"
+	c.IdleTimeout = 30 * time.Second
+
+	c.MaxSessions = -1
+	err := c.Validate()
+	var ce *ConfigError
+	if !errors.As(err, &ce) || ce.Key != "error.max_sessions_nonneg" {
+		t.Fatalf("-1: want error.max_sessions_nonneg, got %v", err)
+	}
+
+	for _, n := range []int{0, 1024} {
+		c.MaxSessions = n
+		if err := c.Validate(); err != nil {
+			t.Fatalf("max-sessions=%d should be valid (0=unlimited), got: %v", n, err)
+		}
+	}
+}

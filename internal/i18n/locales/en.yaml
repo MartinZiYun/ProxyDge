@@ -31,7 +31,7 @@ help.text: |
     -tcp-family-mismatch <a>        mixed address-family action: reject|unknown|legacy (default "reject")
     -tcp-max-connections <n>        max concurrent connections, 0=unlimited (default 4096)
     -udp-idle-timeout <dur>        UDP session idle timeout (default 30s)
-    -udp-max-sessions <n>          max concurrent UDP sessions (default 1024)
+    -udp-max-sessions <n>          max concurrent UDP sessions, 0=unlimited (default 1024)
     -udp-max-datagram-size <n>     max datagram size, 0=unlimited (default 65535)
     -udp-header-mode <m>           every_datagram|first_datagram (default "every_datagram")
     -log-console-level <l>          debug|info|warn|error (default "info")
@@ -65,7 +65,7 @@ error.invalid_policy: "config: invalid policy %q (use|require|reject)"
 error.invalid_untrusted_proxy_action: "config: invalid untrusted-proxy-action %q (reject|strip)"
 error.invalid_protocol: "config: invalid protocol %q (tcp|udp)"
 error.invalid_udp_header_mode: "config: invalid udp.header-mode %q (every_datagram|first_datagram)"
-error.max_sessions_positive: "config: max-sessions must be > 0, got %d"
+error.max_sessions_nonneg: "config: max-sessions must be >= 0 (0=unlimited), got %d"
 error.max_datagram_size_nonneg: "config: max-datagram-size must be >= 0 (0=unlimited), got %d"
 error.idle_timeout_positive: "config: idle-timeout must be > 0, got %v"
 error.invalid_lang: "config: invalid lang %q (en|zh-CN|zh-TW, empty=auto)"

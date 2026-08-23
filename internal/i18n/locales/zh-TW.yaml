@@ -31,7 +31,7 @@ help.text: |
     -tcp-family-mismatch <a>        位址族不一致處置: reject|unknown|legacy (預設 "reject")
     -tcp-max-connections <n>        最大並發連線數, 0=不限制 (預設 4096)
     -udp-idle-timeout <dur>        UDP session 空閒逾時 (預設 30s)
-    -udp-max-sessions <n>          最大並發 UDP session 數 (預設 1024)
+    -udp-max-sessions <n>          最大並發 UDP session 數, 0=不限制 (預設 1024)
     -udp-max-datagram-size <n>     最大資料包大小, 0=無限制 (預設 65535)
     -udp-header-mode <m>           every_datagram|first_datagram (預設 "every_datagram")
     -log-console-level <l>          debug|info|warn|error (預設 "info")
@@ -65,7 +65,7 @@ error.invalid_policy: "設定：無效的 policy %q (use|require|reject)"
 error.invalid_untrusted_proxy_action: "設定：無效的 untrusted-proxy-action %q (reject|strip)"
 error.invalid_protocol: "設定：無效的 protocol %q (tcp|udp)"
 error.invalid_udp_header_mode: "設定：無效的 udp.header-mode %q (every_datagram|first_datagram)"
-error.max_sessions_positive: "設定：max-sessions 必須大於 0，目前 %d"
+error.max_sessions_nonneg: "設定：max-sessions 必須大於等於 0（0=不限制），目前 %d"
 error.max_datagram_size_nonneg: "設定：max-datagram-size 必須大於等於 0（0=無限制），目前 %d"
 error.idle_timeout_positive: "設定：idle-timeout 必須大於 0，目前 %v"
 error.invalid_lang: "設定：無效的 lang %q (en|zh-CN|zh-TW，空=自動)"

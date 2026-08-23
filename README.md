@@ -131,7 +131,7 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 | `-tcp-family-mismatch <a>` | `reject` | Mixed address-family action: `reject` \| `unknown` \| `legacy` |
 | `-tcp-max-connections <n>` | `4096` | Max concurrent connections, over-limit accept closed; `0` = unlimited |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session idle timeout |
-| `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions |
+| `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions; `0` = unlimited |
 | `-udp-max-datagram-size <n>` | `65535` | Max datagram size (0=unlimited) |
 | `-udp-header-mode <m>` | `every_datagram` | `every_datagram` \| `first_datagram` |
 | `-log-console-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
@@ -262,7 +262,7 @@ When `protocol: udp`, ProxyDge runs as a UDP PROXY Protocol gateway with its own
 
 - **Per-session connected upstream sockets**: each client session gets a dedicated `DialUDP` socket — the OS kernel filters responses by source, no application-level routing table needed
 - **Session lifecycle**: NEW → ACTIVE → EXPIRED (idle timeout). Sessions are keyed by `(sourceIP, sourcePort, IPv6 zone)`
-- **Max session limit**: configurable cap on concurrent sessions (default 1024); new sessions from new sources are dropped when at capacity
+- **Max session limit**: configurable cap on concurrent sessions (default 1024, `0` = unlimited); new sessions from new sources are dropped when at capacity
 - **PROXY header emission modes** (`udp.header-mode`):
   - `every_datagram` (default): each datagram carries a PROXY v2 header — downstream is stateless
   - `first_datagram`: only the first datagram in a session carries a header — lower overhead, requires downstream flow state

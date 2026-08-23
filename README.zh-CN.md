@@ -131,7 +131,7 @@ proxydge <command> [options]
 | `-tcp-family-mismatch <a>` | `reject` | 地址族不一致处置: `reject` \| `unknown` \| `legacy` |
 | `-tcp-max-connections <n>` | `4096` | 最大并发连接数,超限 accept 直接关闭;`0`=不限制 |
 | `-udp-idle-timeout <dur>` | `30s` | UDP session 空闲超时 |
-| `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数 |
+| `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数；`0`=不限制 |
 | `-udp-max-datagram-size <n>` | `65535` | 最大数据报大小 (0=无限制) |
 | `-udp-header-mode <m>` | `every_datagram` | `every_datagram` \| `first_datagram` |
 | `-log-console-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
@@ -262,7 +262,7 @@ PROXY header 用一个地址族字段同时描述源和目的。伪造或出 bug
 
 - **每 session 独立上游 socket**：每个客户端 session 获得专用 `DialUDP` socket — 内核按来源过滤响应，无需应用层路由表
 - **Session 生命周期**：NEW → ACTIVE → EXPIRED（空闲超时）。Session 按 `(来源IP, 来源端口, IPv6 zone)` 区分
-- **最大 session 限制**：可配置并发 session 上限（默认 1024）；满时新来源的数据报被丢弃
+- **最大 session 限制**：可配置并发 session 上限（默认 1024，`0`=不限制）；满时新来源的数据报被丢弃
 - **PROXY header 发射模式**（`udp.header-mode`）：
   - `every_datagram`（默认）：每个数据报携带 PROXY v2 header — 下游无状态
   - `first_datagram`：仅 session 首包携带 header — 开销更低，需下游维护 flow state

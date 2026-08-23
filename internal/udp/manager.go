@@ -50,14 +50,20 @@ func (m *UDPSessionManager) Create(
 	idleTimeout time.Duration,
 	log *slog.Logger,
 ) (*UDPSession, error) {
-	if m.count.Load() >= m.maxSessions {
-		return nil, ErrMaxSessions
-	}
-	// Atomic check-and-increment
-	newCount := m.count.Add(1)
-	if newCount > m.maxSessions {
-		m.count.Add(-1) // rollback
-		return nil, ErrMaxSessions
+	// A zero or negative limit disables the cap entirely (the config accepts
+	// 0=unlimited for udp.max-sessions) — symmetric with tcp.max-connections.
+	if m.maxSessions > 0 {
+		if m.count.Load() >= m.maxSessions {
+			return nil, ErrMaxSessions
+		}
+		// Atomic check-and-increment
+		newCount := m.count.Add(1)
+		if newCount > m.maxSessions {
+			m.count.Add(-1) // rollback
+			return nil, ErrMaxSessions
+		}
+	} else {
+		m.count.Add(1)
 	}
 	s := newSession(key, clientAddr, listener, upstream, idleTimeout, log, m.remove)
 	actual, loaded := m.sessions.LoadOrStore(key, s)

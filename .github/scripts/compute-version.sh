@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Computes the version string + metadata. This is the single source of truth
-# for version logic — push and release both go through the CI reusable workflow,
+# for version logic — dev-build and release both go through the CI reusable workflow,
 # which calls this, so they never re-derive it.
 #
 # Inputs (env):
-#   RELEASE      "true" for tagged releases, "false" for dev push builds
+#   RELEASE      "true" for tagged releases, "false" for dev builds
 #   BUILD_NUMBER required (from alloc-build-number.sh)
 #   COMMIT       optional override (default: git rev-parse --short HEAD)
 #   BUILD_TIME   optional override (default: now, UTC RFC3339)

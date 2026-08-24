@@ -1,6 +1,6 @@
 # Fast verification on every push to main: vet + tests only. No artifacts,
 # no build-number allocation — the counter in ci.yml's meta job is consumed
-# only by push.yml (manual dev builds) and release.yml (tagged releases).
+# only by dev-build.yml (manual dev builds) and release.yml (tagged releases).
 name: test
 
 on:

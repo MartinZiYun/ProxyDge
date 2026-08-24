@@ -32,7 +32,7 @@
 
 从 [Releases](https://github.com/MartinZiYun/ProxyDge/releases) 页面下载对应平台的二进制文件。
 
-开发版：在 [Actions 运行列表](https://github.com/MartinZiYun/ProxyDge/actions/workflows/push.yml) 打开最近一次成功运行，从 Artifacts 区下载对应平台的二进制文件。
+开发版：在 [Actions 运行列表](https://github.com/MartinZiYun/ProxyDge/actions/workflows/dev-build.yml) 打开最近一次成功运行，从 Artifacts 区下载对应平台的二进制文件。
 
 ### 配置
 

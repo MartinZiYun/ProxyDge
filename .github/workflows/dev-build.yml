@@ -1,7 +1,7 @@
 # Dev artifact workflow: builds vX.Y.Z-dev.<build> binaries ON DEMAND via
-# workflow_dispatch (Actions UI or `gh workflow run push.yml`). Automatic
+# workflow_dispatch (Actions UI or `gh workflow run dev-build.yml`). Automatic
 # verification on push lives in test.yml; tagged releases in release.yml.
-name: push
+name: dev-build
 
 on:
   workflow_dispatch:

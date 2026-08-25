@@ -160,6 +160,7 @@ func (s *UDPSession) readLoop() {
 			return // Session expired — don't forward
 		default:
 		}
+		s.log.Debug("readLoop: received from upstream", "remote", s.clientAddr, "bytes", n)
 		_, _ = s.listener.WriteToUDP(buf[:n], s.clientAddr)
 		s.refresh()
 	}

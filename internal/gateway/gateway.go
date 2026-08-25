@@ -66,9 +66,11 @@ const (
 	FamilyMismatchUnknown
 	// FamilyMismatchLegacy skips detection entirely: headers flow into the
 	// version-parameterized writer unguarded, whose library-native coercion
-	// reproduces the historical behavior byte-for-byte (including silent
-	// ::ffff:-mapped emission). Escape hatch for pre-v3 deployments; the
-	// startup banner warns when it is selected.
+	// forwards them as-is. The v2 wire is byte-identical to the pre-feature
+	// pipeline; the v1 text now serializes ::ffff:-mapped addresses in full
+	// ("::ffff:x.x.x.x", go-proxyproto v0.15.0's netip-based formatter)
+	// rather than v0.7.0's collapsed v4 form. Escape hatch for pre-v3
+	// deployments; the startup banner warns when it is selected.
 	FamilyMismatchLegacy
 )
 

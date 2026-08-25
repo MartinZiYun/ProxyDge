@@ -290,3 +290,57 @@ func TestParseDatagramTLVAreaSkipped(t *testing.T) {
 		t.Fatalf("family: want UDP4, got %v", parsedHdr.Family)
 	}
 }
+
+// TestFormatDatagramIPv6WildcardDestination reproduces the direct-datagram
+// drop: a dual-stack UDP listener bound to a wildcard yields an
+// IPv6-unspecified local address (::). A direct IPv4 client's datagram is
+// synthesized via HeaderFromAddrs(realClient, ::local), which selected the
+// UDP4 family from the source and set DstIP = dstIP.To4() — nil for ::,
+// since ::.To4() returns nil. That nil DstIP made the library reject the
+// header (v0.7.0 ErrInvalidAddress) or collapse it to a LOCAL/no-address
+// frame (v0.15.0), so every direct datagram was dropped.
+//
+// The fix: buildAddrHeader uses the source-family unspecified (0.0.0.0) when
+// the destination cannot be represented in the source's family. The header
+// then round-trips carrying the real client source IP:port and a 0.0.0.0
+// destination.
+func TestFormatDatagramIPv6WildcardDestination(t *testing.T) {
+	src := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1234}
+	dst := &net.UDPAddr{IP: net.ParseIP("::"), Port: 6060} // :: wildcard local
+	hdr := pp.HeaderFromAddrs(src, dst)
+	if hdr.Family != pp.FamilyUDP4 {
+		t.Fatalf("family: want UDP4 (source-driven), got %v", hdr.Family)
+	}
+	if hdr.DstIP == nil {
+		t.Fatalf("DstIP must not be nil — that is the bug being fixed")
+	}
+
+	payload := []byte("DIRECT")
+	encoded, err := NewDatagramWriter().FormatDatagram(hdr, payload)
+	if err != nil {
+		t.Fatalf("format: %v", err)
+	}
+
+	parsedHdr, parsedPayload, _, err := NewDatagramReader().ParseDatagram(encoded)
+	if err != nil {
+		t.Fatalf("round-trip parse (header was not a valid PROXY frame): %v", err)
+	}
+	if !bytes.Equal(parsedPayload, payload) {
+		t.Fatalf("payload: want %q, got %q", payload, parsedPayload)
+	}
+	if parsedHdr.Family != pp.FamilyUDP4 {
+		t.Fatalf("family: want UDP4, got %v", parsedHdr.Family)
+	}
+	if !parsedHdr.SrcIP.Equal(src.IP) {
+		t.Fatalf("srcIP: want %s (real client), got %s", src.IP, parsedHdr.SrcIP)
+	}
+	if parsedHdr.SrcPort != 1234 {
+		t.Fatalf("srcPort: want 1234, got %d", parsedHdr.SrcPort)
+	}
+	if !parsedHdr.DstIP.Equal(net.IPv4zero) {
+		t.Fatalf("dstIP: want 0.0.0.0 (unspecified), got %s", parsedHdr.DstIP)
+	}
+	if parsedHdr.DstPort != 6060 {
+		t.Fatalf("dstPort: want 6060, got %d", parsedHdr.DstPort)
+	}
+}

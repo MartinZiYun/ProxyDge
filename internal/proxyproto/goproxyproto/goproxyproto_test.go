@@ -213,12 +213,15 @@ func TestWriterUnspecV2LocalFrame(t *testing.T) {
 	}
 }
 
-// TestWriterMixedFamilyErrorsBothVersions: a family-TCP4 header whose dst is
-// pure IPv6 cannot be encoded faithfully by either version — the library's
-// IPv4 branches need dst.To4() and return ErrInvalidAddress. The gateway
-// turns this into the reject/unknown decision BEFORE dialing; the writer
-// just refuses honestly rather than fabricating bytes.
-func TestWriterMixedFamilyErrorsBothVersions(t *testing.T) {
+// TestWriterMixedFamilyCoercesToV6: a family-TCP4 header whose destination
+// is pure IPv6 cannot be encoded as TCP4. Since go-proxyproto v0.15.0,
+// HeaderProxyFromAddrs selects the family from BOTH addresses and coerces such
+// a pair to TCPv6 — mapping the IPv4 source through ::ffff: — instead of
+// returning ErrInvalidAddress (which v0.7.0 did, because it chose the family
+// from the source alone). This coercion is exactly what family-mismatch=legacy
+// forwards unguarded; reject/unknown catch the mismatch earlier via
+// FamilyMatchesAddrs, so the writer never sees a mixed pair outside legacy.
+func TestWriterMixedFamilyCoercesToV6(t *testing.T) {
 	hdr := pp.Header{
 		SrcIP:   net.IPv4(192, 0, 2, 1),
 		SrcPort: 1234,
@@ -226,11 +229,23 @@ func TestWriterMixedFamilyErrorsBothVersions(t *testing.T) {
 		DstPort: 8080,
 		Family:  pp.FamilyTCP4,
 	}
-	for _, ver := range []byte{1, 2} {
-		var buf bytes.Buffer
-		err := NewWriter(ver).WriteTo(&buf, hdr)
-		if !errors.Is(err, gop.ErrInvalidAddress) {
-			t.Fatalf("v%d mixed-family: want ErrInvalidAddress, got %v", ver, err)
-		}
+
+	// v2: coerced to a TCPv6 frame (sig + 0x21 ver/cmd + 0x21 INET6|STREAM ...).
+	var buf2 bytes.Buffer
+	if err := NewWriter(2).WriteTo(&buf2, hdr); err != nil {
+		t.Fatalf("v2 mixed-family: want coercion (nil err), got %v", err)
+	}
+	if got := buf2.Bytes()[13]; got != 0x21 { // fam/proto byte: INET6|STREAM
+		t.Fatalf("v2 mixed-family family byte: want 0x21 (TCP6), got %#02x", got)
+	}
+
+	// v1: coerced to "PROXY TCP6 ::ffff:192.0.2.1 2001:db8::1 1234 8080".
+	var buf1 bytes.Buffer
+	if err := NewWriter(1).WriteTo(&buf1, hdr); err != nil {
+		t.Fatalf("v1 mixed-family: want coercion (nil err), got %v", err)
+	}
+	want := "PROXY TCP6 ::ffff:192.0.2.1 2001:db8::1 1234 8080\r\n"
+	if got := buf1.String(); got != want {
+		t.Fatalf("v1 mixed-family wire:\nwant %q\n got %q", want, got)
 	}
 }

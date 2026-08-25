@@ -5,7 +5,102 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"proxydge/internal/gateway"
+	"proxydge/internal/udp"
 )
+
+// Unit tests for the config-string→enum mapping helpers. These are pure
+// functions with a default branch; integration tests exercise only the valid
+// values (config.Validate restricts inputs), so the default branches and the
+// non-default cases stayed at 0% coverage.
+
+func TestGatewayPolicy(t *testing.T) {
+	tests := []struct {
+		in   string
+		want gateway.Policy
+	}{
+		{"use", gateway.PolicyUse},
+		{"require", gateway.PolicyRequire},
+		{"reject", gateway.PolicyReject},
+		{"", gateway.PolicyUse},      // default
+		{"bogus", gateway.PolicyUse}, // default
+	}
+	for _, tt := range tests {
+		if got := gatewayPolicy(tt.in); got != tt.want {
+			t.Errorf("gatewayPolicy(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestUntrustedProxyAction(t *testing.T) {
+	tests := []struct {
+		in   string
+		want gateway.UntrustedAction
+	}{
+		{"reject", gateway.UntrustedReject},
+		{"strip", gateway.UntrustedStrip},
+		{"", gateway.UntrustedReject},   // default
+		{"bogus", gateway.UntrustedReject},
+	}
+	for _, tt := range tests {
+		if got := untrustedProxyAction(tt.in); got != tt.want {
+			t.Errorf("untrustedProxyAction(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestTCPHeaderVersion(t *testing.T) {
+	tests := []struct {
+		in   string
+		want byte
+	}{
+		{"v1", 1},
+		{"v2", 2},
+		{"", 2},     // default
+		{"bogus", 2},
+	}
+	for _, tt := range tests {
+		if got := tcpHeaderVersion(tt.in); got != tt.want {
+			t.Errorf("tcpHeaderVersion(%q) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestFamilyMismatch(t *testing.T) {
+	tests := []struct {
+		in   string
+		want gateway.FamilyMismatchAction
+	}{
+		{"reject", gateway.FamilyMismatchReject},
+		{"unknown", gateway.FamilyMismatchUnknown},
+		{"legacy", gateway.FamilyMismatchLegacy},
+		{"", gateway.FamilyMismatchReject},   // default
+		{"bogus", gateway.FamilyMismatchReject},
+	}
+	for _, tt := range tests {
+		if got := familyMismatch(tt.in); got != tt.want {
+			t.Errorf("familyMismatch(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestUDPHeaderMode(t *testing.T) {
+	tests := []struct {
+		in   string
+		want udp.OutputMode
+	}{
+		{"every_datagram", udp.OutputEveryDatagram},
+		{"first_datagram", udp.OutputFirstDatagram},
+		{"", udp.OutputEveryDatagram},   // default
+		{"bogus", udp.OutputEveryDatagram},
+	}
+	for _, tt := range tests {
+		if got := udpHeaderMode(tt.in); got != tt.want {
+			t.Errorf("udpHeaderMode(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
 
 func TestStartEmptyUpstreamFails(t *testing.T) {
 	// Explicitly empty upstream triggers validation error (exit 2).

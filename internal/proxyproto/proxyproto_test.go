@@ -70,6 +70,65 @@ func TestHeaderFromConnNonTCP(t *testing.T) {
 	}
 }
 
+// TestHeaderFromAddrsUDP4 covers the UDP branch of the type switch — the
+// UDPAddr case is structurally identical to TCP but the switch must match it
+// independently. Without this, HeaderFromAddrs's UDP path is dead coverage.
+func TestHeaderFromAddrsUDP4(t *testing.T) {
+	src := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1234}
+	dst := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 8080}
+	h := HeaderFromAddrs(src, dst)
+	if h.Family != FamilyUDP4 {
+		t.Fatalf("family: want UDP4, got %v", h.Family)
+	}
+	if got, want := h.SrcIP.String(), "192.0.2.1"; got != want {
+		t.Fatalf("src ip: want %s, got %s", want, got)
+	}
+	if h.SrcPort != 1234 {
+		t.Fatalf("src port: want 1234, got %d", h.SrcPort)
+	}
+	if got, want := h.DstIP.String(), "198.51.100.1"; got != want {
+		t.Fatalf("dst ip: want %s, got %s", want, got)
+	}
+	if h.DstPort != 8080 {
+		t.Fatalf("dst port: want 8080, got %d", h.DstPort)
+	}
+}
+
+// TestHeaderFromAddrsUDP6 covers buildAddrHeader's v6 (else) branch via UDP —
+// a pure IPv6 source drives the else path, exercising the To4()==nil check.
+func TestHeaderFromAddrsUDP6(t *testing.T) {
+	src := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 1234}
+	dst := &net.UDPAddr{IP: net.ParseIP("2001:db8::2"), Port: 8080}
+	h := HeaderFromAddrs(src, dst)
+	if h.Family != FamilyUDP6 {
+		t.Fatalf("family: want UDP6, got %v", h.Family)
+	}
+	if got, want := h.SrcIP.String(), "2001:db8::1"; got != want {
+		t.Fatalf("src ip: want %s, got %s", want, got)
+	}
+	if h.SrcPort != 1234 {
+		t.Fatalf("src port: want 1234, got %d", h.SrcPort)
+	}
+	if got, want := h.DstIP.String(), "2001:db8::2"; got != want {
+		t.Fatalf("dst ip: want %s, got %s", want, got)
+	}
+	if h.DstPort != 8080 {
+		t.Fatalf("dst port: want 8080, got %d", h.DstPort)
+	}
+}
+
+// TestHeaderFromAddrsMismatchedTypes covers the !ok branch: a TCP source with
+// a UDP destination fails the dst type assertion inside the TCP case → Unspec.
+// Without this, the mismatch guard is dead coverage.
+func TestHeaderFromAddrsMismatchedTypes(t *testing.T) {
+	src := &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1234}
+	dst := &net.UDPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 8080}
+	h := HeaderFromAddrs(src, dst)
+	if h.Family != FamilyUnspec {
+		t.Fatalf("mismatched src/dst types: want Unspec, got %v", h.Family)
+	}
+}
+
 // --- FamilyMatchesAddrs: per-address consistency with the declared family ---
 
 func TestFamilyMatchesAddrsConsistent(t *testing.T) {

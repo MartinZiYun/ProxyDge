@@ -32,20 +32,23 @@ type writer struct {
 //     Header, and they surface here as UNKNOWN/LOCAL. Per the PROXY protocol
 //     spec, downstream MUST implement fallback logic for these forms.
 //
-//   - any other family: HeaderProxyFromAddrs infers the transport from the
-//     SOURCE address alone and encodes BOTH addresses under it. For
+//   - any other family: HeaderProxyFromAddrs infers the transport from BOTH
+//     addresses (go-proxyproto v0.15.0+ both-ends family selection; v0.7.0
+//     used the source alone) and encodes them under it. For
 //     family-consistent headers — the only kind reject/unknown paths ever
 //     forward, and the only kind direct sockets can produce — this is exact.
 //
-//     For mismatched headers the library coerces silently in some directions
-//     (e.g. the TCPv6 branches map an IPv4 destination through To16() into
-//     ::ffff:-mapped form). That behavior is deliberately preserved here,
-//     unguarded: it IS what family-mismatch=legacy promises (byte-identical
-//     historical output). The gateway's FamilyMatchesAddrs check upstream of
-//     this call is what keeps reject/unknown paths from ever feeding it
-//     mixed-family headers. Never "improve" the coercion here — silently
-//     rewriting addresses is precisely the deception this feature exists to
-//     make explicit.
+//     For mismatched headers the library coerces silently (the TCPv6 branches
+//     map an IPv4 end through To16() into ::ffff:-mapped form). That behavior
+//     is deliberately preserved here, unguarded: it IS what family-mismatch=
+//     legacy promises. The v2 wire stays byte-identical across library
+//     versions; the v1 text now serializes the mapped form as "::ffff:x.x.x.x"
+//     (v0.15.0's netip-based formatter) instead of v0.7.0's collapsed
+//     "x.x.x.x". The gateway's FamilyMatchesAddrs check upstream of this call
+//     is what keeps reject/unknown paths from ever feeding it mixed-family
+//     headers. Never "improve" the coercion here — silently rewriting
+//     addresses is precisely the deception this feature exists to make
+//     explicit.
 func (wr writer) WriteTo(w io.Writer, hdr pp.Header) error {
 	if hdr.Family == pp.FamilyUnspec {
 		var h *gop.Header

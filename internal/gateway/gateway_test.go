@@ -845,8 +845,11 @@ func TestLegacyV2GoldenBytes(t *testing.T) {
 
 // TestLegacyV1GoldenText: legacy + v1 output follows formatVersion1's native
 // TCPv6 branch — the IPv4 destination is coerced via To16() into its mapped
-// text form and emitted as TCP6. Exact-string fixture per the library's
-// documented behavior at the pinned go-proxyproto v0.7.0.
+// text form and emitted as TCP6. Since go-proxyproto v0.15.0 the v1 formatter
+// serializes through netip.Addr, so the ::ffff:-mapped form is preserved as
+// "::ffff:192.168.1.1" (v0.7.0 collapsed it to "192.168.1.1" via net.IP).
+// The v2 path (TestLegacyV2GoldenBytes) is unaffected — both versions write
+// the 16-byte mapped form on the wire.
 func TestLegacyV1GoldenText(t *testing.T) {
 	downAddr, recorded := startDownstream(t)
 	gw := startGatewayFM(t, 1, FamilyMismatchLegacy, downAddr)
@@ -854,7 +857,7 @@ func TestLegacyV1GoldenText(t *testing.T) {
 	dialAndExchange(t, gw, mixedV2Header(t), []byte("PING"))
 	select {
 	case got := <-recorded:
-		want := append([]byte("PROXY TCP6 2001:db8::1 192.168.1.1 443 80\r\n"), []byte("PING")...)
+		want := append([]byte("PROXY TCP6 2001:db8::1 ::ffff:192.168.1.1 443 80\r\n"), []byte("PING")...)
 		if !bytes.Equal(got, want) {
 			t.Fatalf("legacy v1 wire:\nwant %x (%q)\n got %x (%q)", want, want, got, got)
 		}

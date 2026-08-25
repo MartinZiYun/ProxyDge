@@ -139,11 +139,26 @@ func HeaderFromAddrs(src, dst net.Addr) Header {
 }
 
 // buildAddrHeader constructs a Header from IP/port pairs, selecting the
-// v4 or v6 family based on whether the source IP is IPv4.
+// v4 or v6 family based on whether the source IP is IPv4. The destination is
+// normalized to the selected family: when the source is IPv4 but the
+// destination has no IPv4 form — the only real case being a dual-stack
+// wildcard listener whose LocalAddr is ::, an IPv6 address whose To4() is
+// nil — the destination is set to the IPv4 unspecified address (0.0.0.0)
+// rather than nil. A nil DstIP makes the PROXY library reject the header
+// (go-proxyproto v0.7.0 ErrInvalidAddress) or collapse it to a
+// LOCAL/no-address frame (v0.15.0), dropping every direct datagram. The
+// source — the real client address that policy=use exists to convey — is
+// always preserved. TCP is unaffected: an accepted connection's LocalAddr is
+// always a specific, family-consistent address.
 func buildAddrHeader(srcIP net.IP, srcPort int, dstIP net.IP, dstPort int, famV4, famV6 Family) Header {
 	h := Header{SrcPort: uint16(srcPort), DstPort: uint16(dstPort)}
 	if v4 := srcIP.To4(); v4 != nil {
-		h.SrcIP, h.DstIP = v4, dstIP.To4()
+		h.SrcIP = v4
+		if d4 := dstIP.To4(); d4 != nil {
+			h.DstIP = d4
+		} else {
+			h.DstIP = net.IPv4zero
+		}
 		h.Family = famV4
 	} else {
 		h.SrcIP, h.DstIP = srcIP, dstIP

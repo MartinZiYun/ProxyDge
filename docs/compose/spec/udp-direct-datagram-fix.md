@@ -1,14 +1,61 @@
 ---
 feature: udp-direct-datagram-fix
-status: in-progress
+status: delivered
 updated: 2026-08-25
 branch: udp-direct-datagram-fix
-commits: TBD
+commits: c579706..bc1306b
 ---
 
 # UDP Direct-Datagram PROXY Header Fix
 
 ## Report
+
+**What was built** — Direct-client UDP datagrams under `policy=use` +
+`udp.header-mode=every_datagram` are no longer dropped. `buildAddrHeader`
+(internal/proxyproto/proxyproto.go) now normalizes an IPv4-family destination
+that has no IPv4 form — the dual-stack wildcard listener's `::` local address,
+whose `To4()` is nil — to `net.IPv4zero` (0.0.0.0) instead of nil. The
+synthesized PROXY v2 UDP4 header is then family-consistent and non-nil, so
+`FormatDatagram` emits it carrying the real client source IP:port (the
+information `policy=use` exists to convey). TCP is unaffected (an accepted
+connection's `LocalAddr` is always a specific, family-consistent address).
+
+The dependency `github.com/pires/go-proxyproto` is upgraded v0.7.0 → v0.15.0
+and pinned. v0.15.0's both-ends `HeaderProxyFromAddrs` family selection and
+netip-based v1 formatter changed the TCP `family-mismatch=legacy` v1 wire
+(a v4-mapped address now serializes as `::ffff:1.2.3.4` in full, not
+collapsed `1.2.3.4`); the v2 wire and the reject/unknown paths are
+unaffected. Two v0.7.0-specific tests and two now-stale comments were
+reconciled to v0.15.0's (more spec-correct) behavior.
+
+**Verification** — run in the worktree, all PASS:
+- `go build ./...` — PASS
+- `go vet ./...` — PASS
+- `go test ./...` — PASS (every package; `internal/udp` 7.9s, `internal/gateway` 3.4s)
+- `TestFormatDatagramIPv6WildcardDestination` — confirmed FAIL before the
+  `buildAddrHeader` fix (`DstIP must not be nil`) and PASS after (TDD red→green).
+- Reviewer re-ran the two reconciled tests targeted — PASS; `go list -m`
+  confirms v0.15.0 resolves with no `replace` directive.
+
+**Journey log**:
+1. The error `proxyproto: invalid address` pointed at the library's `Format()`,
+   but the nil originated upstream in our `buildAddrHeader` (`::`.To4() == nil)
+   — the library was the messenger, not the culprit.
+2. Tests bound to specific IPs (`127.0.0.1`, `::1`) never reproduced it; the
+   bug only shows on a wildcard bind, so the regression test synthesizes the
+   `::` local addr directly via `HeaderFromAddrs` rather than relying on
+   platform-dependent `LocalAddr`.
+3. v0.15.0 alone "fixes" the error by degrading to a LOCAL/no-address frame —
+   which still defeats `policy=use`; the nil-IP fix is required regardless of
+   the upgrade.
+4. v0.15.0's both-ends family selection changed the TCP family-mismatch=legacy
+   v1 wire (`::ffff:` in full); v2 wire unchanged. Reconciled 2 tests + 2
+   stale comments; reject/unknown production paths unaffected (guarded by
+   `FamilyMatchesAddrs`).
+5. Advisory, not actioned (non-critical): `buildAddrHeader` substitutes
+   `0.0.0.0` for any nil-`To4()` dst, not only `::`; safe because the sole
+   caller feeds a bind address. A narrower guard was declined (impossible-case
+   complexity, against the project's simplicity rule).
 
 ## [S1] Problem
 

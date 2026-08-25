@@ -161,7 +161,9 @@ func (s *UDPSession) readLoop() {
 		default:
 		}
 		s.log.Debug("readLoop: received from upstream", "remote", s.clientAddr, "bytes", n)
-		_, _ = s.listener.WriteToUDP(buf[:n], s.clientAddr)
+		if _, err := s.listener.WriteToUDP(buf[:n], s.clientAddr); err != nil {
+			s.log.Debug("readLoop: WriteToUDP failed", "remote", s.clientAddr, "err", err)
+		}
 		s.refresh()
 	}
 }

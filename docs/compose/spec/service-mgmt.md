@@ -3,7 +3,7 @@ feature: service-mgmt
 status: delivered
 updated: 2026-08-31
 branch: feature/service-mgmt
-commits: a185476..aa38eeb
+commits: a185476..ef45a80
 ---
 
 # 跨平台服务管理 (kardianos/service)
@@ -12,15 +12,16 @@ commits: a185476..aa38eeb
 
 **What was built** — 为 ProxyDge 添加了跨平台系统服务管理能力，使用 `github.com/kardianos/service v1.3.0` 支持 Windows Service、Linux systemd、macOS launchd。新增 `proxydge service install/uninstall/start/stop/status` 嵌套子命令，现有 `proxydge start` 行为完全不变。
 
-从 `cmdStart` 中提取了 `runGateway(cfg *config.Config)` 函数，返回 `(closer, <-chan error, err)`，供 `cmdStart` 和 `proxydgeService.Start` 共用。`proxydgeService` 实现 `service.Interface`，采用单消费者 errc 模型：monitor goroutine 唯一读取 errc，fatal error 通过 `os.Exit(1)` 直接终止进程以触发 OS Recovery Action（Windows OnFailure=restart）。install 时将配置路径转为绝对路径、校验文件存在性，已安装时提示不重启。
+从 `cmdStart` 中提取了 `runGateway(cfg *config.Config)` 函数，返回 `(closer, <-chan error, err)`，供 `cmdStart` 和 `proxydgeService.Start` 共用。`proxydgeService` 实现 `service.Interface`，采用单消费者 errc 模型：monitor goroutine 唯一读取 errc，fatal error 通过 `os.Exit(1)` 直接终止进程以触发 OS Recovery Action（Windows OnFailure=restart）。`cmdStart` 通过 `service.Interactive()` 检测运行模式：交互终端走信号处理路径，服务管理器走 `proxydgeService` + `service.Run()` 路径。install 时将配置路径转为绝对路径、校验文件存在性，已安装时提示不重启。14 个单元测试覆盖全部控制路径。
 
-**Verification** — `go vet ./...` PASS，`go test ./... -count=1` 全部通过（11 个包），`go build` 成功。手动验证：`proxydge service`（无参数）→ exit 2，`proxydge service status` → "not installed"，`proxydge service install` → Windows "Access is denied"（需管理员），`proxydge start -listen bad-addr` → 正常报错。
+**Verification** — `go vet ./...` PASS，`go test ./... -count=1` 全部通过（11 个包，含 14 个新增 service 测试），`go build` 成功。手动验证：`proxydge service`（无参数）→ exit 2，`proxydge service status` → "not installed"，`proxydge service install` → Windows "Access is denied"（需管理员），`proxydge start -listen bad-addr` → 正常报错。
 
 **Journey log**
 - 用户反馈将 install 行为从"先卸载再安装"改为 ddns-go 模式（已安装则提示退出，不重启不覆盖）
 - errc 从双消费者（Start goroutine + Stop）改为单消费者（仅 monitor goroutine），Stop 通过 done channel 等待
 - fatal error 机制从 service.Run() 返回 error 改为 os.Exit(1)，确保 Windows Recovery Action 触发
 - runGateway 签名从接收 config path 改为接收已加载的 *config.Config，配置加载职责在调用方
+- review 发现 proxydgeService 是死代码（缺少 service.Interactive() 桥接），修复后 Windows SCM 可正常启动服务
 
 ## [S1] Problem
 

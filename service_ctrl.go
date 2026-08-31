@@ -35,6 +35,10 @@ func (c *kardianosServiceController) Start() error                        { retu
 func (c *kardianosServiceController) Stop() error                         { return c.svc.Stop() }
 func (c *kardianosServiceController) Status() (service.Status, error)     { return c.svc.Status() }
 
+// newServiceControllerFunc is the factory used by service commands to create
+// a ServiceController. Tests replace this with a fake.
+var newServiceControllerFunc = newServiceController
+
 // newServiceController creates the kardianos service.Service with the given
 // config path recorded in the service arguments. The returned
 // ServiceController is ready for Install/Uninstall/Start/Stop/Status.
@@ -140,7 +144,7 @@ func serviceInstall(args []string, cat *i18n.Catalog) int {
 		return 2
 	}
 
-	ctrl, err := newServiceController(absPath)
+	ctrl, err := newServiceControllerFunc(absPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", "install", err))
 		return 1
@@ -185,7 +189,7 @@ func serviceControl(action string, args []string, cat *i18n.Catalog) int {
 
 	// For start/stop/uninstall, config path doesn't matter — the service
 	// already has its arguments recorded. Use default for the controller.
-	ctrl, err := newServiceController(config.DefaultConfigPath())
+	ctrl, err := newServiceControllerFunc(config.DefaultConfigPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 		return 1
@@ -194,18 +198,30 @@ func serviceControl(action string, args []string, cat *i18n.Catalog) int {
 	switch action {
 	case "start":
 		if err := ctrl.Start(); err != nil {
+			if errors.Is(err, service.ErrNotInstalled) {
+				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
+				return 1
+			}
 			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, cat.T("service.started"))
 	case "stop":
 		if err := ctrl.Stop(); err != nil {
+			if errors.Is(err, service.ErrNotInstalled) {
+				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
+				return 1
+			}
 			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 			return 1
 		}
 		fmt.Fprintln(os.Stderr, cat.T("service.stopped"))
 	case "uninstall":
 		if err := ctrl.Uninstall(); err != nil {
+			if errors.Is(err, service.ErrNotInstalled) {
+				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
+				return 1
+			}
 			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 			return 1
 		}
@@ -229,7 +245,7 @@ func serviceStatus(args []string, cat *i18n.Catalog) int {
 		cat, _ = i18n.Load(i18n.DetectLocale(*lang))
 	}
 
-	ctrl, err := newServiceController(config.DefaultConfigPath())
+	ctrl, err := newServiceControllerFunc(config.DefaultConfigPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", "status", err))
 		return 1

@@ -23,6 +23,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/kardianos/service"
+
 	"proxydge/internal/config"
 	"proxydge/internal/gateway"
 	"proxydge/internal/i18n"
@@ -114,6 +116,27 @@ func cmdStart(args []string) int {
 	}
 	if key, args := cfg.MigrationNotice(); key != "" {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", cat.T("label.notice"), cat.T(key, args...))
+	}
+
+	// When running under the OS service manager (Windows SCM, systemd, etc.),
+	// delegate to proxydgeService which implements service.Interface.
+	// On interactive terminals, use the normal signal-handling path.
+	if !service.Interactive() {
+		svcCfg := &service.Config{
+			Name:        "ProxyDge",
+			DisplayName: "ProxyDge Gateway",
+			Description: "PROXY Protocol normalizing gateway for TCP and UDP",
+		}
+		svc, err := service.New(&proxydgeService{cfg: cfg}, svcCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "proxydge: service: %v\n", err)
+			return 1
+		}
+		if err := svc.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "proxydge: service run: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	closer, errc, err := runGateway(cfg)

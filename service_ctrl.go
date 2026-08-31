@@ -200,7 +200,7 @@ func serviceControl(action string, args []string, cat *i18n.Catalog) int {
 		if err := ctrl.Start(); err != nil {
 			if errors.Is(err, service.ErrNotInstalled) {
 				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
-				return 1
+				return 2
 			}
 			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 			return 1
@@ -210,7 +210,7 @@ func serviceControl(action string, args []string, cat *i18n.Catalog) int {
 		if err := ctrl.Stop(); err != nil {
 			if errors.Is(err, service.ErrNotInstalled) {
 				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
-				return 1
+				return 2
 			}
 			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 			return 1
@@ -220,7 +220,7 @@ func serviceControl(action string, args []string, cat *i18n.Catalog) int {
 		if err := ctrl.Uninstall(); err != nil {
 			if errors.Is(err, service.ErrNotInstalled) {
 				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
-				return 1
+				return 2
 			}
 			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 			return 1

@@ -247,8 +247,8 @@ func TestServiceControlNotInstalled(t *testing.T) {
 			cat := testCat()
 			got := captureStderr(t, func() {
 				code := serviceControl(action, nil, cat)
-				if code != 1 {
-					t.Fatalf("want 1, got %d", code)
+				if code != 2 {
+					t.Fatalf("want 2, got %d", code)
 				}
 			})
 			if !strings.Contains(got, "not installed") {

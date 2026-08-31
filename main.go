@@ -51,6 +51,8 @@ func run(args []string) int {
 		return cmdInit(args[1:])
 	case "version":
 		return cmdVersion(args[1:])
+	case "service":
+		return cmdService(args[1:])
 	case "help":
 		fmt.Fprint(out, helpText(args[1:]))
 		return 0

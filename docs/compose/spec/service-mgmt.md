@@ -1,13 +1,26 @@
 ---
 feature: service-mgmt
-status: in-progress
+status: delivered
 updated: 2026-08-31
 branch: feature/service-mgmt
+commits: a185476..aa38eeb
 ---
 
 # 跨平台服务管理 (kardianos/service)
 
 ## Report
+
+**What was built** — 为 ProxyDge 添加了跨平台系统服务管理能力，使用 `github.com/kardianos/service v1.3.0` 支持 Windows Service、Linux systemd、macOS launchd。新增 `proxydge service install/uninstall/start/stop/status` 嵌套子命令，现有 `proxydge start` 行为完全不变。
+
+从 `cmdStart` 中提取了 `runGateway(cfg *config.Config)` 函数，返回 `(closer, <-chan error, err)`，供 `cmdStart` 和 `proxydgeService.Start` 共用。`proxydgeService` 实现 `service.Interface`，采用单消费者 errc 模型：monitor goroutine 唯一读取 errc，fatal error 通过 `os.Exit(1)` 直接终止进程以触发 OS Recovery Action（Windows OnFailure=restart）。install 时将配置路径转为绝对路径、校验文件存在性，已安装时提示不重启。
+
+**Verification** — `go vet ./...` PASS，`go test ./... -count=1` 全部通过（11 个包），`go build` 成功。手动验证：`proxydge service`（无参数）→ exit 2，`proxydge service status` → "not installed"，`proxydge service install` → Windows "Access is denied"（需管理员），`proxydge start -listen bad-addr` → 正常报错。
+
+**Journey log**
+- 用户反馈将 install 行为从"先卸载再安装"改为 ddns-go 模式（已安装则提示退出，不重启不覆盖）
+- errc 从双消费者（Start goroutine + Stop）改为单消费者（仅 monitor goroutine），Stop 通过 done channel 等待
+- fatal error 机制从 service.Run() 返回 error 改为 os.Exit(1)，确保 Windows Recovery Action 触发
+- runGateway 签名从接收 config path 改为接收已加载的 *config.Config，配置加载职责在调用方
 
 ## [S1] Problem
 
@@ -214,7 +227,7 @@ type ServiceController interface {
 
 ## Tasks
 
-- [ ] T1: 提取网关运行逻辑为 `runGateway(cfg *config.Config)` 函数 — acceptance: `cmdStart` 调用 `runGateway()` 后行为不变，所有现有测试通过，`errc` 类型为 `<-chan error`，配置加载在调用方完成 (covers: S2.5)
+- [x] T1: 提取网关运行逻辑为 `runGateway(cfg *config.Config)` 函数 — acceptance: `cmdStart` 调用 `runGateway()` 后行为不变，所有现有测试通过，`errc` 类型为 `<-chan error`，配置加载在调用方完成 (covers: S2.5)
 - [ ] T2: 实现 `proxydgeService` 结构体和 `service.Interface` — acceptance: 单元测试验证 `Start()` 非阻塞启动 Gateway，`Stop()` 能关闭 Gateway 并正常返回；fatal error 导致 `os.Exit(1)` 而非通过 `service.Run()` 返回；errc 单消费者（仅 Stop 读取）无并发竞争 (covers: S2.4; depends: T1)
 - [ ] T3: 定义 `ServiceController` 接口 + `kardianosServiceController` 生产实现 + `cmdService()` 分发函数 — acceptance: `proxydge service install/uninstall/start/stop/status` 各子命令正确分发，未知子命令返回错误 (covers: S2.2, S2.6)
 - [ ] T4: 实现 install/uninstall 逻辑（使用 `fakeServiceController`）— acceptance: 单元测试验证 install 传入正确的 Config（Name/Arguments/DisplayName 含绝对路径），已安装时打印提示并 exit 0 不重启；配置文件不存在时报错 exit 2 (covers: S2.3, S2.8)

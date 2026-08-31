@@ -119,27 +119,37 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-protocol <p>` | `tcp` | `tcp` \| `udp` — selects gateway mode |
-| `-listen <addr>` | `:9000` | Listen address |
-| `-upstream <host:port>` | `127.0.0.1:9001` | Downstream target |
-| `-policy <p>` | `use` | `use` \| `require` \| `reject` |
-| `-trusted-networks <cidrs>` | (empty = trust all) | Trusted networks, comma-separated CIDRs or bare IPs |
-| `-untrusted-proxy-action <a>` | `reject` | `reject` \| `strip` |
+| `-listen <addr>` | `:9000` | Listen address (host:port) |
+| `-upstream <host:port>` | `127.0.0.1:9001` | Downstream target (host:port) |
+| `-policy <p>` | `use` | PROXY header acceptance policy (see below) |
+| `-trusted-networks <cidrs>` | (empty = trust all) | Trusted networks, comma-separated CIDRs or bare IPs (see below) |
+| `-untrusted-proxy-action <a>` | `reject` | Action when untrusted source sends PROXY header: `reject` \| `strip` (see below) |
 | `-config <path>` | `<exe-dir>/config.yaml` | Config file path |
 | `-lang <locale>` | auto-detect | `en` \| `zh-CN` \| `zh-TW` |
-| `-tcp-detect-timeout <dur>` | `1s` | PROXY header detection timeout (0=block indefinitely) |
-| `-tcp-idle-timeout <dur>` | `5m` | Pipe idle timeout (0=disabled) |
-| `-tcp-header-version <v>` | `v2` | Downstream PROXY header version: `v1` \| `v2` |
-| `-tcp-family-mismatch <a>` | `reject` | Mixed address-family action: `reject` \| `unknown` \| `legacy` |
-| `-tcp-max-connections <n>` | `4096` | Max concurrent connections, over-limit accept closed; `0` = unlimited |
-| `-udp-idle-timeout <dur>` | `30s` | UDP session idle timeout |
-| `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions; `0` = unlimited |
-| `-udp-max-datagram-size <n>` | `65535` | Max datagram size (0=unlimited) |
-| `-udp-header-mode <m>` | `every_datagram` | `every_datagram` \| `first_datagram` |
-| `-log-console-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `-log-console-format <f>` | `text` | `text` \| `json` |
+| `-tcp-detect-timeout <dur>` | `1s` | Time to wait for a PROXY header before treating the connection as direct. `0` = block indefinitely until a complete header arrives or the peer closes. |
+| `-tcp-idle-timeout <dur>` | `5m` | Pipe idle timeout. Each direction (upstream↔downstream) has an independent timer; if no data flows in a direction for this duration, that side is closed. `0` = disabled. |
+| `-tcp-header-version <v>` | `v2` | Downstream PROXY header version. `v2` = binary (full address-family coverage, TLV support). `v1` = text (`PROXY TCP4 ...` / `PROXY TCP6 ...`) for downstream services that only understand the legacy format. |
+| `-tcp-family-mismatch <a>` | `reject` | What to do when an upstream PROXY header declares one address family but carries addresses from another (e.g. AF_INET6 with a `::ffff:`-mapped IPv4 destination). `reject` = close the connection. `unknown` = forward an address-less header (`PROXY UNKNOWN` / LOCAL+AF_UNSPEC) so downstream falls back per spec. `legacy` = skip the check, keep historical byte-for-byte behavior (prints a startup WARNING). |
+| `-tcp-max-connections <n>` | `4096` | Max concurrent TCP connections. When the limit is reached, new connections are accepted then immediately closed. `0` = unlimited. |
+| `-udp-idle-timeout <dur>` | `30s` | UDP session idle timeout. Sessions with no datagrams for this duration are expired. |
+| `-udp-max-sessions <n>` | `1024` | Max concurrent UDP sessions; `0` = unlimited. New sessions from new sources are dropped when at capacity. |
+| `-udp-max-datagram-size <n>` | `65535` | Max datagram size in bytes. Oversized datagrams are dropped. `0` = unlimited. |
+| `-udp-header-mode <m>` | `every_datagram` | PROXY header emission mode. `every_datagram` = each downstream datagram carries a PROXY v2 header (downstream is stateless). `first_datagram` = only the first datagram in a session carries a header (lower overhead, downstream must track session state). |
+| `-log-console-level <l>` | `info` | Console (stderr) log level: `debug` \| `info` \| `warn` \| `error` |
+| `-log-console-format <f>` | `text` | Console log format: `text` \| `json` |
 | `-log-file <path>` | (empty = disabled) | File log path |
-| `-log-file-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `-log-file-format <f>` | `text` | `text` \| `json` |
+| `-log-file-level <l>` | `info` | File log level: `debug` \| `info` \| `warn` \| `error` |
+| `-log-file-format <f>` | `text` | File log format: `text` \| `json` |
+
+#### Policy
+
+The `policy` field controls whether PROXY Protocol headers are accepted at all:
+
+| Value | Behavior |
+|-------|----------|
+| `use` (default) | Accept all connections — those with PROXY headers are parsed normally, those without are treated as direct connections. Most permissive. |
+| `require` | PROXY header is mandatory. Direct connections (no header) are rejected. Only connections carrying a valid PROXY header are forwarded. |
+| `reject` | PROXY header is forbidden. Connections carrying a PROXY header are rejected. Only direct connections are forwarded. |
 
 ### init Options
 
@@ -162,13 +172,19 @@ Manage ProxyDge as a system service (Windows Service / Linux systemd / macOS lau
 
 | Subcommand | Description |
 |------------|-------------|
-| `install` | Install as a system service and auto-start. Config path defaults to `<exe-dir>/config.yaml`; override with `-config`. Path is converted to absolute automatically. |
+| `install` | Install as a system service and auto-start. Config path defaults to `<exe-dir>/config.yaml`; override with `-config`. Path is converted to absolute automatically. If the service is already installed, prints a notice and exits without restarting or overwriting. |
 | `uninstall` | Remove the system service. |
 | `start` | Start the installed service. |
 | `stop` | Stop the running service. |
 | `status` | Print service status (Running / Stopped / Unknown). |
 
 All subcommands accept `-lang <locale>` to override the display language.
+
+#### Platform notes
+
+- **Windows**: `install` and `uninstall` require Administrator privileges. The service runs under the Local System account. Recovery is configured to restart on failure with delayed auto-start.
+- **Linux (systemd)**: `install` and `uninstall` require root. A systemd unit file is generated at `/etc/systemd/system/ProxyDge.service`. Gateway stdout/stderr is captured by the journal (`journalctl -u ProxyDge`).
+- **macOS (launchd)**: `install` and `uninstall` require root. A launchd plist is written to `/Library/LaunchDaemons/com.ProxyDge.plist`.
 
 ### version Options
 

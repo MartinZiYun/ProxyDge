@@ -21,20 +21,32 @@ help.text: |
     -protocol <p>                   tcp|udp — selects gateway mode (default "tcp")
     -listen <addr>                  listen address (default ":9000")
     -upstream <host:port>           downstream target (default "127.0.0.1:9001")
-    -policy <p>                     use|require|reject (default "use")
+    -policy <p>                     PROXY header acceptance policy (default "use"):
+                                      use     = accept all; with or without header
+                                      require = PROXY header mandatory; direct rejected
+                                      reject  = PROXY header forbidden; only direct
     -trusted-networks <cidrs>       trusted networks (comma-separated CIDRs or IPs, empty=all)
     -untrusted-proxy-action <a>     reject|strip (default "reject")
     -config <path>                  config file path
     -lang <locale>                  display language: en|zh-CN|zh-TW (default auto)
-    -tcp-detect-timeout <dur>       PROXY header detection timeout (0=block indefinitely, default 1s)
-    -tcp-idle-timeout <dur>         pipe idle timeout, 0=disabled (default 5m)
-    -tcp-header-version <v>         downstream PROXY header version: v1|v2 (default "v2")
-    -tcp-family-mismatch <a>        mixed address-family action: reject|unknown|legacy (default "reject")
-    -tcp-max-connections <n>        max concurrent connections, 0=unlimited (default 4096)
+    -tcp-detect-timeout <dur>       time to wait for PROXY header before treating as direct
+                                    connection; 0=block indefinitely (default 1s)
+    -tcp-idle-timeout <dur>         pipe idle timeout per direction (upstream/downstream
+                                    independent); 0=disabled (default 5m)
+    -tcp-header-version <v>         downstream PROXY header version: v2=binary (default,
+                                    full address-family + TLV), v1=text (PROXY TCP4/TCP6)
+    -tcp-family-mismatch <a>        action when declared addr family contradicts addresses
+                                    (default "reject"):
+                                      reject  = close connection
+                                      unknown = forward addressless header (PROXY UNKNOWN)
+                                      legacy  = historical behavior, prints startup WARNING
+    -tcp-max-connections <n>        max concurrent TCP connections, 0=unlimited (default 4096)
     -udp-idle-timeout <dur>        UDP session idle timeout (default 30s)
     -udp-max-sessions <n>          max concurrent UDP sessions, 0=unlimited (default 1024)
     -udp-max-datagram-size <n>     max datagram size, 0=unlimited (default 65535)
-    -udp-header-mode <m>           every_datagram|first_datagram (default "every_datagram")
+    -udp-header-mode <m>           PROXY header emission mode (default "every_datagram"):
+                                     every_datagram  = each datagram carries a header
+                                     first_datagram  = only session's first datagram
     -log-console-level <l>          debug|info|warn|error (default "info")
     -log-console-format <f>        text|json (default "text")
     -log-file <path>               file log path (empty = disabled)

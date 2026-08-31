@@ -21,20 +21,32 @@ help.text: |
     -protocol <p>                   tcp|udp — 选择网关模式 (默认 "tcp")
     -listen <addr>                  监听地址 (默认 ":9000")
     -upstream <host:port>           下游目标 (默认 "127.0.0.1:9001")
-    -policy <p>                     use|require|reject (默认 "use")
+    -policy <p>                     PROXY header 接受策略 (默认 "use"):
+                                      use     = 接受所有连接，有无 header 均可
+                                      require = 必须有 PROXY header，直连被拒绝
+                                      reject  = 禁止 PROXY header，只允许直连
     -trusted-networks <cidrs>       可信网段 (逗号分隔 CIDR 或裸 IP, 空=全部信任)
     -untrusted-proxy-action <a>     reject|strip (默认 "reject")
     -config <path>                  配置文件路径
     -lang <locale>                  显示语言: en|zh-CN|zh-TW (默认自动)
-    -tcp-detect-timeout <dur>       PROXY 头探测超时 (0=无限等待, 默认 1s)
-    -tcp-idle-timeout <dur>         管道空闲超时, 0=禁用 (默认 5m)
-    -tcp-header-version <v>         下游 PROXY header 版本: v1|v2 (默认 "v2")
-    -tcp-family-mismatch <a>        地址族不一致处置: reject|unknown|legacy (默认 "reject")
+    -tcp-detect-timeout <dur>       等待 PROXY header 的超时时间，超时后视为直连;
+                                    0=无限等待，直到收到完整 header 或对端关闭 (默认 1s)
+    -tcp-idle-timeout <dur>         管道空闲超时，上行/下行独立计时;
+                                    某方向无数据超过此时间则关闭该侧; 0=禁用 (默认 5m)
+    -tcp-header-version <v>         下游 PROXY header 版本 (默认 "v2"):
+                                      v2 = 二进制格式 (完整地址族覆盖、支持 TLV)
+                                      v1 = 文本格式 (PROXY TCP4/TCP6)，供旧下游使用
+    -tcp-family-mismatch <a>        声明地址族与实际地址矛盾时的处置 (默认 "reject"):
+                                      reject  = 关闭连接
+                                      unknown = 转发无地址 header (PROXY UNKNOWN)
+                                      legacy  = 保持历史行为，启动时打印 WARNING
     -tcp-max-connections <n>        最大并发连接数, 0=不限制 (默认 4096)
     -udp-idle-timeout <dur>        UDP session 空闲超时 (默认 30s)
     -udp-max-sessions <n>          最大并发 UDP session 数, 0=不限制 (默认 1024)
     -udp-max-datagram-size <n>     最大数据报大小, 0=无限制 (默认 65535)
-    -udp-header-mode <m>           every_datagram|first_datagram (默认 "every_datagram")
+    -udp-header-mode <m>           PROXY header 发射模式 (默认 "every_datagram"):
+                                     every_datagram = 每个数据报都携带 header (下游无状态)
+                                     first_datagram = 仅 session 首个数据报携带 header
     -log-console-level <l>          debug|info|warn|error (默认 "info")
     -log-console-format <f>        text|json (默认 "text")
     -log-file <path>               文件日志路径 (空=禁用)

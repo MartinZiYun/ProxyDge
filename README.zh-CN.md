@@ -119,27 +119,37 @@ proxydge <command> [options]
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
 | `-protocol <p>` | `tcp` | `tcp` \| `udp` — 选择网关模式 |
-| `-listen <addr>` | `:9000` | 监听地址 |
-| `-upstream <host:port>` | `127.0.0.1:9001` | 下游目标 |
-| `-policy <p>` | `use` | `use` \| `require` \| `reject` |
-| `-trusted-networks <cidrs>` | （空=信任全部） | 可信网络，逗号分隔 CIDR 或裸 IP |
-| `-untrusted-proxy-action <a>` | `reject` | `reject` \| `strip` |
+| `-listen <addr>` | `:9000` | 监听地址（host:port） |
+| `-upstream <host:port>` | `127.0.0.1:9001` | 下游目标（host:port） |
+| `-policy <p>` | `use` | PROXY header 接受策略（详见下方） |
+| `-trusted-networks <cidrs>` | （空=信任全部） | 可信网络，逗号分隔 CIDR 或裸 IP（详见下方） |
+| `-untrusted-proxy-action <a>` | `reject` | 不可信来源发送 PROXY header 时的处置：`reject` \| `strip`（详见下方） |
 | `-config <path>` | `<exe-dir>/config.yaml` | 配置文件路径 |
 | `-lang <locale>` | 自动检测 | `en` \| `zh-CN` \| `zh-TW` |
-| `-tcp-detect-timeout <dur>` | `1s` | PROXY header 检测超时（0=无限等待） |
-| `-tcp-idle-timeout <dur>` | `5m` | 管道空闲超时（0=禁用） |
-| `-tcp-header-version <v>` | `v2` | 下游 PROXY header 版本：`v1` \| `v2` |
-| `-tcp-family-mismatch <a>` | `reject` | 地址族不一致处置：`reject` \| `unknown` \| `legacy` |
-| `-tcp-max-connections <n>` | `4096` | 最大并发连接数，超限 accept 直接关闭；`0`=不限制 |
-| `-udp-idle-timeout <dur>` | `30s` | UDP session 空闲超时 |
-| `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数；`0`=不限制 |
-| `-udp-max-datagram-size <n>` | `65535` | 最大数据报大小 (0=无限制) |
-| `-udp-header-mode <m>` | `every_datagram` | `every_datagram` \| `first_datagram` |
-| `-log-console-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `-log-console-format <f>` | `text` | `text` \| `json` |
+| `-tcp-detect-timeout <dur>` | `1s` | 等待 PROXY header 的超时时间。超时后连接被视为直连。`0` = 无限等待，直到收到完整 header 或对端关闭。 |
+| `-tcp-idle-timeout <dur>` | `5m` | 管道空闲超时。上行和下行各有独立计时器；某方向无数据流动超过此时间则关闭该侧。`0` = 禁用。 |
+| `-tcp-header-version <v>` | `v2` | 下游 PROXY header 版本。`v2` = 二进制格式（完整地址族覆盖、支持 TLV）。`v1` = 文本格式（`PROXY TCP4 ...` / `PROXY TCP6 ...`），供只认旧格式的下游服务使用。 |
+| `-tcp-family-mismatch <a>` | `reject` | 上游 PROXY header 声明的地址族与实际地址矛盾时的处置（如 AF_INET6 携带 `::ffff:` 映射的 IPv4 目的地址）。`reject` = 关闭连接。`unknown` = 转发无地址 header（`PROXY UNKNOWN` / LOCAL+AF_UNSPEC），下游按协议走兜底逻辑。`legacy` = 跳过检查，保持历史逐字节行为（启动时打印 WARNING）。 |
+| `-tcp-max-connections <n>` | `4096` | 最大 TCP 并发连接数。达到上限时新连接被 accept 后立即关闭。`0` = 不限制。 |
+| `-udp-idle-timeout <dur>` | `30s` | UDP session 空闲超时。超过此时长无数据报的 session 将被过期清理。 |
+| `-udp-max-sessions <n>` | `1024` | 最大并发 UDP session 数。达到上限时新来源的 session 被丢弃。`0` = 不限制。 |
+| `-udp-max-datagram-size <n>` | `65535` | 最大数据报大小（字节）。超大数据报被丢弃。`0` = 无限制。 |
+| `-udp-header-mode <m>` | `every_datagram` | PROXY header 发射模式。`every_datagram` = 每个下游数据报都携带 PROXY v2 header（下游无状态）。`first_datagram` = 仅 session 首个数据报携带 header（开销更低，下游需维护会话状态）。 |
+| `-log-console-level <l>` | `info` | 控制台（stderr）日志级别：`debug` \| `info` \| `warn` \| `error` |
+| `-log-console-format <f>` | `text` | 控制台日志格式：`text` \| `json` |
 | `-log-file <path>` | （空=禁用） | 文件日志路径 |
-| `-log-file-level <l>` | `info` | `debug` \| `info` \| `warn` \| `error` |
-| `-log-file-format <f>` | `text` | `text` \| `json` |
+| `-log-file-level <l>` | `info` | 文件日志级别：`debug` \| `info` \| `warn` \| `error` |
+| `-log-file-format <f>` | `text` | 文件日志格式：`text` \| `json` |
+
+#### Policy
+
+`policy` 字段控制是否接受 PROXY Protocol header：
+
+| 值 | 行为 |
+|---|------|
+| `use`（默认） | 接受所有连接——有 PROXY header 的正常解析，没有的当直连处理。最宽松。 |
+| `require` | **强制要求** PROXY header。直连（无 header）被拒绝。只允许携带有效 PROXY header 的连接通过。 |
+| `reject` | **禁止** PROXY header。携带 PROXY header 的连接被拒绝。只允许直连通过。 |
 
 ### init 选项
 
@@ -162,13 +172,19 @@ proxydge <command> [options]
 
 | 子命令 | 说明 |
 |--------|------|
-| `install` | 安装为系统服务并自动启动。配置路径默认 `<exe-dir>/config.yaml`，可通过 `-config` 覆盖。路径自动转为绝对路径。 |
+| `install` | 安装为系统服务并自动启动。配置路径默认 `<exe-dir>/config.yaml`，可通过 `-config` 覆盖。路径自动转为绝对路径。已安装时打印提示，不重启不覆盖。 |
 | `uninstall` | 卸载系统服务。 |
 | `start` | 启动已安装的服务。 |
 | `stop` | 停止运行中的服务。 |
 | `status` | 显示服务状态（运行中 / 已停止 / 未知）。 |
 
 所有子命令支持 `-lang <locale>` 覆盖显示语言。
+
+#### 平台说明
+
+- **Windows**：`install` 和 `uninstall` 需要管理员权限。服务以 Local System 账户运行。故障恢复配置为延迟自动重启。
+- **Linux (systemd)**：`install` 和 `uninstall` 需要 root。systemd 单元文件生成在 `/etc/systemd/system/ProxyDge.service`。网关 stdout/stderr 由 journal 捕获（`journalctl -u ProxyDge`）。
+- **macOS (launchd)**：`install` 和 `uninstall` 需要 root。launchd plist 写入 `/Library/LaunchDaemons/com.ProxyDge.plist`。
 
 ### version 选项
 

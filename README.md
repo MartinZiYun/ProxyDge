@@ -106,6 +106,7 @@ On startup, version info, config sources, and security warnings (if any) are pri
 proxydge <command> [options]
 
   start     Run the gateway
+  service   Manage system service (install/uninstall/start/stop/status)
   init      Generate a sample config.yaml
   version   Print version and build info
   help      Show help
@@ -146,6 +147,28 @@ Running `./proxydge` with no arguments is equivalent to `help`.
 |--------|-------------|
 | `-config <path>` | Where to write the sample config (default: `<exe-dir>/config.yaml`) |
 | `-force` | Overwrite an existing config file (refused by default) |
+
+### service Options
+
+Manage ProxyDge as a system service (Windows Service / Linux systemd / macOS launchd).
+
+```bash
+./proxydge service install [-config /path/to/config.yaml]   # install + auto-start
+./proxydge service uninstall                                 # uninstall
+./proxydge service start                                     # start installed service
+./proxydge service stop                                      # stop installed service
+./proxydge service status                                    # show service status
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `install` | Install as a system service and auto-start. Config path defaults to `<exe-dir>/config.yaml`; override with `-config`. Path is converted to absolute automatically. |
+| `uninstall` | Remove the system service. |
+| `start` | Start the installed service. |
+| `stop` | Stop the running service. |
+| `status` | Print service status (Running / Stopped / Unknown). |
+
+All subcommands accept `-lang <locale>` to override the display language.
 
 ### version Options
 

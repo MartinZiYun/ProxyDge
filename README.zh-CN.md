@@ -106,6 +106,7 @@ log:
 proxydge <command> [options]
 
   start     运行网关
+  service   管理系统服务 (install/uninstall/start/stop/status)
   init      生成示例 config.yaml
   version   打印版本和构建信息
   help      显示帮助
@@ -146,6 +147,28 @@ proxydge <command> [options]
 |------|------|
 | `-config <path>` | 示例配置写入位置（默认：`<exe-dir>/config.yaml`）|
 | `-force` | 覆盖已存在的配置文件（默认拒绝）|
+
+### service 选项
+
+管理 ProxyDge 系统服务（Windows Service / Linux systemd / macOS launchd）。
+
+```bash
+./proxydge service install [-config /path/to/config.yaml]   # 安装并自动启动
+./proxydge service uninstall                                 # 卸载
+./proxydge service start                                     # 启动已安装的服务
+./proxydge service stop                                      # 停止服务
+./proxydge service status                                    # 查询服务状态
+```
+
+| 子命令 | 说明 |
+|--------|------|
+| `install` | 安装为系统服务并自动启动。配置路径默认 `<exe-dir>/config.yaml`，可通过 `-config` 覆盖。路径自动转为绝对路径。 |
+| `uninstall` | 卸载系统服务。 |
+| `start` | 启动已安装的服务。 |
+| `stop` | 停止运行中的服务。 |
+| `status` | 显示服务状态（运行中 / 已停止 / 未知）。 |
+
+所有子命令支持 `-lang <locale>` 覆盖显示语言。
 
 ### version 选项
 

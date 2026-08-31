@@ -6,6 +6,7 @@ help.text: |
 
   Commands:
     start     Run the gateway.
+    service   Manage system service (install/uninstall/start/stop/status).
     init      Write a sample config.yaml.
     version   Print version and build info.
     help      Show this help.
@@ -43,6 +44,14 @@ help.text: |
   init options:
     -config <path>                  where to write the sample (default: <exe-dir>/config.yaml)
     -force                          overwrite an existing config file
+
+  service options:
+    install   [-config <path>]      Install as a system service (default config: <exe-dir>/config.yaml)
+    uninstall                       Uninstall the system service
+    start                           Start the installed service
+    stop                            Stop the installed service
+    status                          Show service status
+    -lang <locale>                  display language: en|zh-CN|zh-TW (default auto)
 
 warning.trusted_networks.empty: "trusted-networks is empty: all sources are trusted. Any IP can spoof source addresses via PROXY headers. Configure trusted-networks in production."
 warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip: non-trusted sources with PROXY headers will have their headers stripped and forwarded with real socket addresses. They can still connect — use reject (default) to deny them."

@@ -6,6 +6,7 @@ help.text: |
 
   命令：
     start     執行閘道器。
+    service   管理系統服務 (install/uninstall/start/stop/status)。
     init      產生範例 config.yaml。
     version   列印版本與建置資訊。
     help      顯示此說明。
@@ -43,6 +44,14 @@ help.text: |
   init 選項：
     -config <path>                  範例設定寫入位置 (預設: <exe-dir>/config.yaml)
     -force                          覆寫已有設定檔
+
+  service 選項：
+    install   [-config <path>]      安裝為系統服務 (預設設定: <exe-dir>/config.yaml)
+    uninstall                       解除安裝系統服務
+    start                           啟動已安裝的服務
+    stop                            停止已安裝的服務
+    status                          查詢服務狀態
+    -lang <locale>                  顯示語言: en|zh-CN|zh-TW (預設自動)
 
 warning.trusted_networks.empty: "trusted-networks 為空：所有來源均被信任。任何 IP 都可透過 PROXY header 偽造來源位址。請在生產環境設定 trusted-networks。"
 warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip：非可信來源的 PROXY header 將被剝離，改用真實套接字位址轉發。它們仍可連線——使用 reject（預設）可拒絕。"

@@ -79,3 +79,16 @@ error.invalid_log_console_level: "配置：无效的 log console level %q (debug
 error.invalid_log_console_format: "配置：无效的 log console format %q (text|json)"
 error.invalid_log_file_level: "配置：无效的 log file level %q (debug|info|warn|error)"
 error.invalid_log_file_format: "配置：无效的 log file format %q (text|json)"
+
+# 服务管理
+service.installed: "服务安装成功。"
+service.uninstalled: "服务已卸载。"
+service.started: "服务已启动。"
+service.stopped: "服务已停止。"
+service.status.running: "服务状态：运行中"
+service.status.stopped: "服务状态：已停止"
+service.status.unknown: "服务状态：未知（未安装）"
+service.already_installed: "服务已安装，无需再次安装。"
+service.not_installed: "服务未安装。"
+error.service_action: "服务 %s：%v"
+error.config_not_found: "配置文件不存在：%s"

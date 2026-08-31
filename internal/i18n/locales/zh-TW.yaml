@@ -6,6 +6,7 @@ help.text: |
 
   命令：
     start     執行閘道器。
+    service   管理系統服務 (install/uninstall/start/stop/status)。
     init      產生範例 config.yaml。
     version   列印版本與建置資訊。
     help      顯示此說明。
@@ -44,6 +45,14 @@ help.text: |
     -config <path>                  範例設定寫入位置 (預設: <exe-dir>/config.yaml)
     -force                          覆寫已有設定檔
 
+  service 選項：
+    install   [-config <path>]      安裝為系統服務 (預設設定: <exe-dir>/config.yaml)
+    uninstall                       解除安裝系統服務
+    start                           啟動已安裝的服務
+    stop                            停止已安裝的服務
+    status                          查詢服務狀態
+    -lang <locale>                  顯示語言: en|zh-CN|zh-TW (預設自動)
+
 warning.trusted_networks.empty: "trusted-networks 為空：所有來源均被信任。任何 IP 都可透過 PROXY header 偽造來源位址。請在生產環境設定 trusted-networks。"
 warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip：非可信來源的 PROXY header 將被剝離，改用真實套接字位址轉發。它們仍可連線——使用 reject（預設）可拒絕。"
 warning.family_mismatch.legacy: "tcp.family-mismatch=legacy：位址族不一致的標頭將沿用歷史自動轉換行為，可能向下游發出 ::ffff: 映射形式的 IPv4 位址（標記為 IPv6），嚴格的下游可能解析異常或誤連。建議使用 reject 或 unknown。"
@@ -79,3 +88,16 @@ error.invalid_log_console_level: "設定：無效的 log console level %q (debug
 error.invalid_log_console_format: "設定：無效的 log console format %q (text|json)"
 error.invalid_log_file_level: "設定：無效的 log file level %q (debug|info|warn|error)"
 error.invalid_log_file_format: "設定：無效的 log file format %q (text|json)"
+
+# 服務管理
+service.installed: "服務安裝成功。"
+service.uninstalled: "服務已解除安裝。"
+service.started: "服務已啟動。"
+service.stopped: "服務已停止。"
+service.status.running: "服務狀態：執行中"
+service.status.stopped: "服務狀態：已停止"
+service.status.unknown: "服務狀態：未知（未安裝）"
+service.already_installed: "服務已安裝，無需再次安裝。"
+service.not_installed: "服務未安裝。"
+error.service_action: "服務 %s：%v"
+error.config_not_found: "設定檔不存在：%s"

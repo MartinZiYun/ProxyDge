@@ -6,6 +6,7 @@ help.text: |
 
   Commands:
     start     Run the gateway.
+    service   Manage system service (install/uninstall/start/stop/status).
     init      Write a sample config.yaml.
     version   Print version and build info.
     help      Show this help.
@@ -44,6 +45,14 @@ help.text: |
     -config <path>                  where to write the sample (default: <exe-dir>/config.yaml)
     -force                          overwrite an existing config file
 
+  service options:
+    install   [-config <path>]      Install as a system service (default config: <exe-dir>/config.yaml)
+    uninstall                       Uninstall the system service
+    start                           Start the installed service
+    stop                            Stop the installed service
+    status                          Show service status
+    -lang <locale>                  display language: en|zh-CN|zh-TW (default auto)
+
 warning.trusted_networks.empty: "trusted-networks is empty: all sources are trusted. Any IP can spoof source addresses via PROXY headers. Configure trusted-networks in production."
 warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip: non-trusted sources with PROXY headers will have their headers stripped and forwarded with real socket addresses. They can still connect — use reject (default) to deny them."
 warning.family_mismatch.legacy: "tcp.family-mismatch=legacy: historical auto-conversion is kept for headers with mismatched address families; downstream may receive ::ffff:-mapped IPv4 addresses labeled as IPv6, which strict consumers can misparse or misroute. Prefer reject or unknown."
@@ -79,3 +88,16 @@ error.invalid_log_console_level: "config: invalid log console level %q (debug|in
 error.invalid_log_console_format: "config: invalid log console format %q (text|json)"
 error.invalid_log_file_level: "config: invalid log file level %q (debug|info|warn|error)"
 error.invalid_log_file_format: "config: invalid log file format %q (text|json)"
+
+# Service management
+service.installed: "Service installed successfully."
+service.uninstalled: "Service uninstalled successfully."
+service.started: "Service started."
+service.stopped: "Service stopped."
+service.status.running: "Service status: Running"
+service.status.stopped: "Service status: Stopped"
+service.status.unknown: "Service status: Unknown (not installed)"
+service.already_installed: "Service is already installed. No need to install again."
+service.not_installed: "Service is not installed."
+error.service_action: "service %s: %v"
+error.config_not_found: "config file not found: %s"

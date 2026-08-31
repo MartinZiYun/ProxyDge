@@ -6,6 +6,7 @@ help.text: |
 
   命令：
     start     运行网关。
+    service   管理系统服务 (install/uninstall/start/stop/status)。
     init      生成示例 config.yaml。
     version   打印版本与构建信息。
     help      显示此帮助。
@@ -44,6 +45,14 @@ help.text: |
     -config <path>                  示例配置写入位置 (默认: <exe-dir>/config.yaml)
     -force                          覆盖已有配置文件
 
+  service 选项：
+    install   [-config <path>]      安装为系统服务 (默认配置: <exe-dir>/config.yaml)
+    uninstall                       卸载系统服务
+    start                           启动已安装的服务
+    stop                            停止已安装的服务
+    status                          查询服务状态
+    -lang <locale>                  显示语言: en|zh-CN|zh-TW (默认自动)
+
 warning.trusted_networks.empty: "trusted-networks 为空：所有来源均被信任。任何 IP 都可通过 PROXY header 伪造源地址。请在生产环境配置 trusted-networks。"
 warning.untrusted_proxy_action.strip: "untrusted-proxy-action=strip：非可信来源的 PROXY header 将被剥离，改用真实套接字地址转发。它们仍可连接——使用 reject（默认）可拒绝。"
 warning.family_mismatch.legacy: "tcp.family-mismatch=legacy：地址族不一致的头部将沿用历史自动转换行为，可能向下游发出 ::ffff: 映射形式的 IPv4 地址（标记为 IPv6），严格的下游可能解析异常或误连。建议使用 reject 或 unknown。"
@@ -79,3 +88,16 @@ error.invalid_log_console_level: "配置：无效的 log console level %q (debug
 error.invalid_log_console_format: "配置：无效的 log console format %q (text|json)"
 error.invalid_log_file_level: "配置：无效的 log file level %q (debug|info|warn|error)"
 error.invalid_log_file_format: "配置：无效的 log file format %q (text|json)"
+
+# 服务管理
+service.installed: "服务安装成功。"
+service.uninstalled: "服务已卸载。"
+service.started: "服务已启动。"
+service.stopped: "服务已停止。"
+service.status.running: "服务状态：运行中"
+service.status.stopped: "服务状态：已停止"
+service.status.unknown: "服务状态：未知（未安装）"
+service.already_installed: "服务已安装，无需再次安装。"
+service.not_installed: "服务未安装。"
+error.service_action: "服务 %s：%v"
+error.config_not_found: "配置文件不存在：%s"

@@ -15,21 +15,19 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/kardianos/service"
+
 	"proxydge/internal/config"
 	"proxydge/internal/gateway"
 	"proxydge/internal/i18n"
-	"proxydge/internal/proxyproto/goproxyproto"
-	"proxydge/internal/tcp"
 	"proxydge/internal/udp"
 	"proxydge/internal/version"
 )
@@ -55,6 +53,8 @@ func run(args []string) int {
 		return cmdInit(args[1:])
 	case "version":
 		return cmdVersion(args[1:])
+	case "service":
+		return cmdService(args[1:])
 	case "help":
 		fmt.Fprint(out, helpText(args[1:]))
 		return 0
@@ -118,73 +118,48 @@ func cmdStart(args []string) int {
 		fmt.Fprintf(os.Stderr, "%s: %s\n", cat.T("label.notice"), cat.T(key, args...))
 	}
 
-	logger, closeFile, err := buildLogger(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "proxydge: logger: %v\n", err)
-		return 1
+	// When running under the OS service manager (Windows SCM, systemd, etc.),
+	// delegate to proxydgeService which implements service.Interface.
+	// On interactive terminals, use the normal signal-handling path.
+	if !service.Interactive() {
+		svcCfg := &service.Config{
+			Name:        "ProxyDge",
+			DisplayName: "ProxyDge Gateway",
+			Description: "PROXY Protocol normalizing gateway for TCP and UDP",
+		}
+		svc, err := service.New(&proxydgeService{cfg: cfg}, svcCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "proxydge: service: %v\n", err)
+			return 1
+		}
+		if err := svc.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "proxydge: service run: %v\n", err)
+			return 1
+		}
+		return 0
 	}
-	defer closeFile()
 
-	trust, err := gateway.NewTrustChecker(cfg.TrustedNetworks)
+	closer, errc, err := runGateway(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %v\n", err)
 		return 1
 	}
 
-	// Branch on protocol: UDP gateway has its own session/datagram model;
-	// TCP gateway uses the stream-based pipeStream.
-	var errc chan error
-	var closer func()
-
-	if cfg.Protocol == "udp" {
-		g, err := udp.New(
-			cfg.Listen, cfg.Upstream,
-			gatewayPolicy(cfg.Policy), trust, untrustedProxyAction(cfg.UntrustedProxyAction),
-			udpHeaderMode(cfg.UDPHeaderMode),
-			cfg.IdleTimeout, int64(cfg.MaxSessions), cfg.MaxDatagramSize,
-			logger,
-		)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "proxydge: udp gateway: %v\n", err)
-			return 1
-		}
-		defer g.Close()
-		errc = make(chan error, 1)
-		go func() { errc <- g.Serve() }()
-		closer = g.Close
-	} else {
-		ln, err := tcp.Listen("tcp", cfg.Listen)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "proxydge: listen: %v\n", err)
-			return 1
-		}
-		g := gateway.New(
-			ln, tcp.TCPDialer{},
-			goproxyproto.NewReader(), goproxyproto.NewWriter(tcpHeaderVersion(cfg.TCPHeaderVersion)),
-			gatewayPolicy(cfg.Policy), cfg.Upstream, cfg.DetectTimeout, cfg.TCPIdleTimeout, logger,
-			trust, untrustedProxyAction(cfg.UntrustedProxyAction), familyMismatch(cfg.TCPFamilyMismatch),
-			cfg.TCPMaxConnections,
-		)
-		errc = make(chan error, 1)
-		go func() { errc <- g.Serve() }()
-		closer = func() { _ = ln.Close() }
-	}
-
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
 	select {
-	case sig := <-sigc:
-		logger.Info("proxydge: shutting down", "signal", sig.String())
+	case <-sigc:
 		closer()
-		if err := <-errc; err != nil {
-			fmt.Fprintf(os.Stderr, "proxydge: serve: %v\n", err)
-			return 1
-		}
 	case err := <-errc:
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "proxydge: serve: %v\n", err)
 			return 1
 		}
+		return 0
+	}
+	if err := <-errc; err != nil {
+		fmt.Fprintf(os.Stderr, "proxydge: serve: %v\n", err)
+		return 1
 	}
 	return 0
 }
@@ -246,54 +221,6 @@ func cmdVersion(args []string) int {
 	return 0
 }
 
-// buildLogger constructs the unified *slog.Logger from the two independent
-// sinks (console=stderr, file=cfg.LogFilePath). Each sink gets its own level
-// and format (text/json). The gateway receives this single logger and is
-// unaware of how many sinks exist.
-func buildLogger(cfg *config.Config) (*slog.Logger, func(), error) {
-	noop := func() {}
-	var console slog.Handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: parseLevel(cfg.LogConsoleLevel),
-	})
-	if cfg.LogConsoleFormat == "json" {
-		console = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-			Level: parseLevel(cfg.LogConsoleLevel),
-		})
-	}
-	if cfg.LogFilePath == "" {
-		return slog.New(console), noop, nil
-	}
-
-	f, err := os.OpenFile(cfg.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, noop, fmt.Errorf("open log file %s: %w", cfg.LogFilePath, err)
-	}
-	var file slog.Handler = slog.NewTextHandler(f, &slog.HandlerOptions{
-		Level: parseLevel(cfg.LogFileLevel),
-	})
-	if cfg.LogFileFormat == "json" {
-		file = slog.NewJSONHandler(f, &slog.HandlerOptions{
-			Level: parseLevel(cfg.LogFileLevel),
-		})
-	}
-	mh := &multiHandler{console: console, file: file}
-	return slog.New(mh), func() { _ = f.Close() }, nil
-}
-
-// parseLevel maps a config level string to slog.Level.
-func parseLevel(s string) slog.Level {
-	switch s {
-	case "debug":
-		return slog.LevelDebug
-	case "warn":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
-}
-
 // gatewayPolicy maps the validated policy string to the gateway's enum. It is
 // in main (not the config package) so the gateway stays free of config imports.
 func gatewayPolicy(s string) gateway.Policy {
@@ -349,39 +276,4 @@ func udpHeaderMode(s string) udp.OutputMode {
 		return udp.OutputFirstDatagram
 	}
 	return udp.OutputEveryDatagram
-}
-
-// multiHandler fans a record out to console and file handlers, each with its
-// own level threshold and format. Per-sink level filtering happens in each
-// sub-handler's Enabled (checked in Handle so a record is only written to the
-// sinks that are enabled at that level).
-type multiHandler struct {
-	console slog.Handler
-	file    slog.Handler
-}
-
-func (h *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.console.Enabled(ctx, level) || h.file.Enabled(ctx, level)
-}
-
-func (h *multiHandler) Handle(ctx context.Context, r slog.Record) error {
-	if h.console.Enabled(ctx, r.Level) {
-		if err := h.console.Handle(ctx, r); err != nil {
-			return err
-		}
-	}
-	if h.file.Enabled(ctx, r.Level) {
-		if err := h.file.Handle(ctx, r); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (h *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &multiHandler{console: h.console.WithAttrs(attrs), file: h.file.WithAttrs(attrs)}
-}
-
-func (h *multiHandler) WithGroup(name string) slog.Handler {
-	return &multiHandler{console: h.console.WithGroup(name), file: h.file.WithGroup(name)}
 }

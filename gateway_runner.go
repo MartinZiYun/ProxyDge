@@ -100,16 +100,13 @@ func buildLogger(cfg *config.Config) (*slog.Logger, func(), error) {
 		return slog.New(console), noop, nil
 	}
 
-	// Resolve log file path: convert to absolute, then try mapped drive resolution.
+	// Resolve relative log file path to absolute — service processes may
+	// have a different working directory than the interactive terminal.
 	logPath := cfg.LogFilePath
 	if !filepath.IsAbs(logPath) {
 		if abs, err := filepath.Abs(logPath); err == nil {
 			logPath = abs
 		}
-	}
-	if resolved := resolveMappedDrive(logPath); resolved != "" {
-		fmt.Fprintf(os.Stderr, "NOTICE: log file path %s is a mapped drive, resolved to %s\n", logPath, resolved)
-		logPath = resolved
 	}
 
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

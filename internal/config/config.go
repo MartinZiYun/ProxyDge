@@ -590,16 +590,16 @@ type yamlLogFile struct {
 	Format *string `yaml:"format"`
 }
 
-// fixWindowsPaths replaces backslashes with forward slashes in YAML data
-// so that Windows paths like C:\Users\... don't trigger YAML escape
-// sequence errors (\U, \T, \p, etc.). Single-quoted strings are preserved
-// as-is because YAML treats backslashes as literal in single quotes.
+// fixWindowsPaths converts double-quoted YAML strings to single-quoted so
+// that backslashes in Windows paths (C:\Users\...) are treated as literal
+// characters instead of escape sequences. Single-quoted strings are already
+// literal and are left unchanged.
 func fixWindowsPaths(data []byte) []byte {
 	s := string(data)
 	var out strings.Builder
 	out.Grow(len(s))
 	for len(s) > 0 {
-		// Single-quoted string: copy verbatim until closing quote
+		// Single-quoted: copy verbatim
 		if s[0] == '\'' {
 			end := strings.IndexByte(s[1:], '\'')
 			if end < 0 {
@@ -610,11 +610,20 @@ func fixWindowsPaths(data []byte) []byte {
 			s = s[end+2:]
 			continue
 		}
-		if s[0] == '\\' {
-			out.WriteByte('/')
-		} else {
-			out.WriteByte(s[0])
+		// Double-quoted: convert to single-quoted
+		if s[0] == '"' {
+			end := strings.IndexByte(s[1:], '"')
+			if end < 0 {
+				out.WriteString(s)
+				break
+			}
+			out.WriteByte('\'')
+			out.WriteString(s[1 : end+1])
+			out.WriteByte('\'')
+			s = s[end+2:]
+			continue
 		}
+		out.WriteByte(s[0])
 		s = s[1:]
 	}
 	return []byte(out.String())

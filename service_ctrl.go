@@ -160,6 +160,8 @@ func serviceControl(action string, args []string, cat *i18n.Catalog) int {
 	case "stop":
 		opErr = ctrl.Stop()
 	case "uninstall":
+		// Stop the service first if it's running, then uninstall.
+		_ = ctrl.Stop()
 		opErr = ctrl.Uninstall()
 	}
 	if opErr != nil {

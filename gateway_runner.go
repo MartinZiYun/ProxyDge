@@ -109,6 +109,14 @@ func buildLogger(cfg *config.Config) (*slog.Logger, func(), error) {
 		}
 	}
 
+	// Ensure parent directory exists — os.OpenFile with O_CREATE only
+	// creates the file, not parent directories.
+	if dir := filepath.Dir(logPath); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, noop, fmt.Errorf("create log dir %s: %w", dir, err)
+		}
+	}
+
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, noop, fmt.Errorf("open log file %s: %w", logPath, err)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"proxydge/internal/config"
 	"proxydge/internal/gateway"
@@ -99,9 +100,21 @@ func buildLogger(cfg *config.Config) (*slog.Logger, func(), error) {
 		return slog.New(console), noop, nil
 	}
 
-	f, err := os.OpenFile(cfg.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// Resolve log file path: convert to absolute, then try mapped drive resolution.
+	logPath := cfg.LogFilePath
+	if !filepath.IsAbs(logPath) {
+		if abs, err := filepath.Abs(logPath); err == nil {
+			logPath = abs
+		}
+	}
+	if resolved := resolveMappedDrive(logPath); resolved != "" {
+		fmt.Fprintf(os.Stderr, "NOTICE: log file path %s is a mapped drive, resolved to %s\n", logPath, resolved)
+		logPath = resolved
+	}
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return nil, noop, fmt.Errorf("open log file %s: %w", cfg.LogFilePath, err)
+		return nil, noop, fmt.Errorf("open log file %s: %w", logPath, err)
 	}
 	var file slog.Handler = slog.NewTextHandler(f, &slog.HandlerOptions{
 		Level: parseLevel(cfg.LogFileLevel),

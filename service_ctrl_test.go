@@ -13,7 +13,7 @@ import (
 	"proxydge/internal/i18n"
 )
 
-// fakeServiceController implements ServiceController for testing.
+// fakeServiceController implements service.Service for testing.
 type fakeServiceController struct {
 	installErr   error
 	uninstallErr error
@@ -28,25 +28,17 @@ type fakeServiceController struct {
 	stopCalled      bool
 }
 
-func (f *fakeServiceController) Install() error {
-	f.installCalled = true
-	return f.installErr
-}
-func (f *fakeServiceController) Uninstall() error {
-	f.uninstallCalled = true
-	return f.uninstallErr
-}
-func (f *fakeServiceController) Start() error {
-	f.startCalled = true
-	return f.startErr
-}
-func (f *fakeServiceController) Stop() error {
-	f.stopCalled = true
-	return f.stopErr
-}
-func (f *fakeServiceController) Status() (service.Status, error) {
-	return f.statusVal, f.statusErr
-}
+func (f *fakeServiceController) Install() error                      { f.installCalled = true; return f.installErr }
+func (f *fakeServiceController) Uninstall() error                    { f.uninstallCalled = true; return f.uninstallErr }
+func (f *fakeServiceController) Start() error                        { f.startCalled = true; return f.startErr }
+func (f *fakeServiceController) Stop() error                         { f.stopCalled = true; return f.stopErr }
+func (f *fakeServiceController) Status() (service.Status, error)     { return f.statusVal, f.statusErr }
+func (f *fakeServiceController) Restart() error                      { return nil }
+func (f *fakeServiceController) Run() error                          { return nil }
+func (f *fakeServiceController) Logger(errs chan<- error) (service.Logger, error) { return nil, nil }
+func (f *fakeServiceController) SystemLogger(errs chan<- error) (service.Logger, error) { return nil, nil }
+func (f *fakeServiceController) String() string                      { return "fake" }
+func (f *fakeServiceController) Platform() string                    { return "fake" }
 
 // captureStderr runs fn and returns what was written to os.Stderr.
 func captureStderr(t *testing.T, fn func()) string {
@@ -102,7 +94,7 @@ func TestServiceInstallMissingConfig(t *testing.T) {
 func TestServiceInstallAlreadyInstalled(t *testing.T) {
 	fake := &fakeServiceController{statusVal: service.StatusRunning}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -128,7 +120,7 @@ func TestServiceInstallAlreadyInstalled(t *testing.T) {
 func TestServiceInstallFresh(t *testing.T) {
 	fake := &fakeServiceController{statusVal: service.StatusUnknown}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -164,7 +156,7 @@ func TestServiceInstallFresh(t *testing.T) {
 func TestServiceControlStartOK(t *testing.T) {
 	fake := &fakeServiceController{}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -187,7 +179,7 @@ func TestServiceControlStartOK(t *testing.T) {
 func TestServiceControlStopOK(t *testing.T) {
 	fake := &fakeServiceController{}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -210,7 +202,7 @@ func TestServiceControlStopOK(t *testing.T) {
 func TestServiceControlUninstallOK(t *testing.T) {
 	fake := &fakeServiceController{}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -239,7 +231,7 @@ func TestServiceControlNotInstalled(t *testing.T) {
 				uninstallErr: service.ErrNotInstalled,
 			}
 			orig := newServiceControllerFunc
-			newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+			newServiceControllerFunc = func(configPath string) (service.Service, error) {
 				return fake, nil
 			}
 			defer func() { newServiceControllerFunc = orig }()
@@ -261,7 +253,7 @@ func TestServiceControlNotInstalled(t *testing.T) {
 func TestServiceControlGenericError(t *testing.T) {
 	fake := &fakeServiceController{startErr: errors.New("access denied")}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -283,7 +275,7 @@ func TestServiceControlGenericError(t *testing.T) {
 func TestServiceStatusRunning(t *testing.T) {
 	fake := &fakeServiceController{statusVal: service.StatusRunning}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -303,7 +295,7 @@ func TestServiceStatusRunning(t *testing.T) {
 func TestServiceStatusStopped(t *testing.T) {
 	fake := &fakeServiceController{statusVal: service.StatusStopped}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -323,7 +315,7 @@ func TestServiceStatusStopped(t *testing.T) {
 func TestServiceStatusUnknown(t *testing.T) {
 	fake := &fakeServiceController{statusVal: service.StatusUnknown}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()
@@ -343,7 +335,7 @@ func TestServiceStatusUnknown(t *testing.T) {
 func TestServiceStatusError(t *testing.T) {
 	fake := &fakeServiceController{statusErr: errors.New("permission denied")}
 	orig := newServiceControllerFunc
-	newServiceControllerFunc = func(configPath string) (ServiceController, error) {
+	newServiceControllerFunc = func(configPath string) (service.Service, error) {
 		return fake, nil
 	}
 	defer func() { newServiceControllerFunc = orig }()

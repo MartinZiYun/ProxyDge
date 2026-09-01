@@ -14,61 +14,27 @@ import (
 	"proxydge/internal/i18n"
 )
 
-// ServiceController abstracts the service lifecycle operations so that
-// cmdService can be tested without importing kardianos/service directly.
-type ServiceController interface {
-	Install() error
-	Uninstall() error
-	Start() error
-	Stop() error
-	Status() (service.Status, error)
-}
-
-// kardianosServiceController wraps a kardianos service.Service.
-type kardianosServiceController struct {
-	svc service.Service
-}
-
-func (c *kardianosServiceController) Install() error                       { return c.svc.Install() }
-func (c *kardianosServiceController) Uninstall() error                     { return c.svc.Uninstall() }
-func (c *kardianosServiceController) Start() error                        { return c.svc.Start() }
-func (c *kardianosServiceController) Stop() error                         { return c.svc.Stop() }
-func (c *kardianosServiceController) Status() (service.Status, error)     { return c.svc.Status() }
-
 // newServiceControllerFunc is the factory used by service commands to create
-// a ServiceController. Tests replace this with a fake.
+// a service.Service. Tests replace this with a fake.
 var newServiceControllerFunc = newServiceController
 
 // newServiceController creates the kardianos service.Service with the given
-// config path recorded in the service arguments. The returned
-// ServiceController is ready for Install/Uninstall/Start/Stop/Status.
+// config path recorded in the service arguments.
 // configPath must be an absolute path.
-func newServiceController(configPath string) (ServiceController, error) {
+func newServiceController(configPath string) (service.Service, error) {
 	svcConfig := &service.Config{
 		Name:        "ProxyDge",
 		DisplayName: "ProxyDge Gateway",
 		Description: "PROXY Protocol normalizing gateway for TCP and UDP",
 		Arguments:   []string{"start", "-config", configPath},
-		Dependencies: []string{
-			"Requires=network.target",
-			"After=network.target",
-		},
 		Option: service.KeyValue{
-			"DelayedAutoStart": true,
-			"OnFailure":        "restart",
-			"Restart":          "always",
+			"DelayedAutoStart":  true,
+			"OnFailure":         "restart",
+			"Restart":           "always",
 			"SuccessExitStatus": "0",
 		},
 	}
-
-	// serviceNoOp is a no-op shell for install/control operations.
-	// The actual gateway runs when the OS service manager starts the binary
-	// with the recorded arguments, hitting cmdStart via the normal run() path.
-	svc, err := service.New(&serviceNoOp{}, svcConfig)
-	if err != nil {
-		return nil, err
-	}
-	return &kardianosServiceController{svc: svc}, nil
+	return service.New(&serviceNoOp{}, svcConfig)
 }
 
 // cmdService is the dispatcher for "proxydge service <action>".
@@ -119,26 +85,21 @@ func serviceInstall(args []string, cat *i18n.Catalog) int {
 		return 2
 	}
 
-	// Resolve locale if not already resolved.
 	if *lang != "" {
 		cat, _ = i18n.Load(i18n.DetectLocale(*lang))
 	}
 
-	// Resolve config path: explicit flag > default exe-dir.
 	cfgPath := *configFlag
 	if cfgPath == "" {
 		cfgPath = config.DefaultConfigPath()
 	}
 
-	// Convert to absolute path — service processes may have a different
-	// working directory than the interactive terminal.
 	absPath, err := filepath.Abs(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %v\n", err)
 		return 1
 	}
 
-	// Check config file exists before installing.
 	if _, err := os.Stat(absPath); err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.config_not_found", absPath))
 		return 2
@@ -150,7 +111,7 @@ func serviceInstall(args []string, cat *i18n.Catalog) int {
 		return 1
 	}
 
-	// Check if already installed (ddns-go pattern).
+	// Idempotent: already installed → print notice and exit.
 	status, err := ctrl.Status()
 	if err == nil && status != service.StatusUnknown {
 		fmt.Fprintln(os.Stderr, cat.T("service.already_installed"))
@@ -163,7 +124,6 @@ func serviceInstall(args []string, cat *i18n.Catalog) int {
 	}
 	fmt.Fprintln(os.Stderr, cat.T("service.installed"))
 
-	// Auto-start after install.
 	if err := ctrl.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", "start", err))
 		return 1
@@ -187,44 +147,36 @@ func serviceControl(action string, args []string, cat *i18n.Catalog) int {
 		cat, _ = i18n.Load(i18n.DetectLocale(*lang))
 	}
 
-	// For start/stop/uninstall, config path doesn't matter — the service
-	// already has its arguments recorded. Use default for the controller.
 	ctrl, err := newServiceControllerFunc(config.DefaultConfigPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
 		return 1
 	}
 
+	var opErr error
 	switch action {
 	case "start":
-		if err := ctrl.Start(); err != nil {
-			if errors.Is(err, service.ErrNotInstalled) {
-				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
-				return 2
-			}
-			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
-			return 1
+		opErr = ctrl.Start()
+	case "stop":
+		opErr = ctrl.Stop()
+	case "uninstall":
+		opErr = ctrl.Uninstall()
+	}
+	if opErr != nil {
+		if errors.Is(opErr, service.ErrNotInstalled) {
+			fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
+			return 2
 		}
+		fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, opErr))
+		return 1
+	}
+
+	switch action {
+	case "start":
 		fmt.Fprintln(os.Stderr, cat.T("service.started"))
 	case "stop":
-		if err := ctrl.Stop(); err != nil {
-			if errors.Is(err, service.ErrNotInstalled) {
-				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
-				return 2
-			}
-			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
-			return 1
-		}
 		fmt.Fprintln(os.Stderr, cat.T("service.stopped"))
 	case "uninstall":
-		if err := ctrl.Uninstall(); err != nil {
-			if errors.Is(err, service.ErrNotInstalled) {
-				fmt.Fprintln(os.Stderr, cat.T("service.not_installed"))
-				return 2
-			}
-			fmt.Fprintf(os.Stderr, "proxydge: %s\n", cat.T("error.service_action", action, err))
-			return 1
-		}
 		fmt.Fprintln(os.Stderr, cat.T("service.uninstalled"))
 	}
 	return 0

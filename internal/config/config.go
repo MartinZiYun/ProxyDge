@@ -222,7 +222,7 @@ type Warning struct {
 // main can translate them.
 func (c *Config) Warnings() []Warning {
 	var ws []Warning
-	if len(c.TrustedNetworks) == 0 {
+	if len(c.TrustedNetworks) == 0 && c.Policy != "reject" {
 		ws = append(ws, Warning{Key: "warning.trusted_networks.empty"})
 	}
 	if c.UntrustedProxyAction == "strip" {

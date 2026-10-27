@@ -6,7 +6,7 @@
 监听一个端口，接收上游连接/数据报（直连 / PROXY Protocol v1 / v2），将其统一归一化为可配置的 PROXY Protocol 版本，并转发给下游。上游协议形态的差异被本服务吸收。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License">
   <img src="https://img.shields.io/github/release/MartinZiYun/ProxyDge" alt="Release">
 </p>

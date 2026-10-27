@@ -6,7 +6,7 @@
 Listens on a port, accepts upstream connections/datagrams (direct / PROXY Protocol v1 / v2), normalizes them all to a single configurable PROXY Protocol version, and forwards to a downstream. The upstream protocol variant differences are absorbed by this service.
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License">
   <img src="https://img.shields.io/github/release/MartinZiYun/ProxyDge" alt="Release">
 </p>
